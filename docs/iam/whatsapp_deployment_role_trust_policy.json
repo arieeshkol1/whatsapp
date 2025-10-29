@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowGithubCicdUser",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::960915223703:user/github-cicd"
+      },
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ]
+    }
+  ]
+}
