@@ -120,6 +120,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           role-to-assume: arn:aws:iam::${{ secrets.DEV_AWS_ACCOUNT_ID }}:role/${{ secrets.DEV_AWS_DEPLOY_ROLE }}
           role-session-name: GitHubActionsCICD
+          role-skip-session-tagging: true
 
       - name: Configure AWS Credentials (PROD)
         if: github.event.inputs.environment == 'prod'
@@ -130,6 +131,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           role-to-assume: arn:aws:iam::${{ secrets.PROD_AWS_ACCOUNT_ID }}:role/${{ secrets.PROD_AWS_DEPLOY_ROLE }}
           role-session-name: GitHubActionsCICD
+          role-skip-session-tagging: true
 
       - name: Who am I (debug)
         run: aws sts get-caller-identity
@@ -222,6 +224,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           role-to-assume: arn:aws:iam::${{ secrets.DEV_AWS_ACCOUNT_ID }}:role/${{ secrets.DEV_AWS_DEPLOY_ROLE }}
           role-session-name: GitHubActionsCICD
+          role-skip-session-tagging: true
 
       - name: Configure AWS Credentials (PROD)
         if: github.event.inputs.environment == 'prod'
@@ -232,6 +235,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           role-to-assume: arn:aws:iam::${{ secrets.PROD_AWS_ACCOUNT_ID }}:role/${{ secrets.PROD_AWS_DEPLOY_ROLE }}
           role-session-name: GitHubActionsCICD
+          role-skip-session-tagging: true
 
       - name: Who am I (debug)
         run: aws sts get-caller-identity
