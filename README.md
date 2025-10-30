@@ -49,6 +49,10 @@ These steps show the creation of a Secret on AWS that will contain the required 
 
 - [AWS_CONFIGURATION README](./docs/AWS_CONFIGURATION.md)
 
+### CI/CD Automation
+
+Information about the Codex auto-approval workflow, why pull requests are still required, and how deployments reach the `dev` environment is available in [CI_AUTOMATION](./docs/CI_AUTOMATION.md).
+
 ## Shoutouts 🙌
 
 Thanks for all the inspiration and guidance on the Generative AI journey:
