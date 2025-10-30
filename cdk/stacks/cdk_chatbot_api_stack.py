@@ -222,6 +222,16 @@ class ChatbotAPIStack(Stack):
                 "AmazonBedrockFullAccess",
             ),
         )
+        self.lambda_state_machine_process_message.role.add_to_policy(
+            aws_iam.PolicyStatement(
+                effect=aws_iam.Effect.ALLOW,
+                actions=["bedrock:InvokeAgent"],
+                # Bedrock's InvokeAgent runtime currently requires wildcard resource access
+                # because the agent alias ARN includes both the agent and alias IDs that are
+                # only known after deployment.
+                resources=["*"],
+            )
+        )
 
         # Lambda Function for the Bedrock Agent Group (fetch recipes)
         bedrock_agent_lambda_role = aws_iam.Role(
