@@ -1,119 +1,75 @@
-# Built-in imports
+# state_machine/processing/bedrock_agent.py
 import os
-from typing import Optional
-
 import boto3
-from botocore.exceptions import ClientError, EventStreamError
+from botocore.exceptions import BotoCoreError, ClientError
+from aws_lambda_powertools import Logger
 
-# Own imports
-from common.logger import custom_logger
-
-
-ENVIRONMENT = os.environ.get("ENVIRONMENT")
-
-logger = custom_logger()
-
-# Create a bedrock runtime client
-bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime")
-ssm_client = boto3.client("ssm")
+logger = Logger(service="wpp-chatbot-sm-general")
 
 
-def get_ssm_parameter(parameter_name):
+def _runtime(region: str):
+    return boto3.client("bedrock-agent-runtime", region_name=region)
+
+
+def call_bedrock_agent(
+    *,
+    region: str | None = None,
+    agent_id: str | None = None,
+    agent_alias_id: str | None = None,
+    session_id: str,
+    input_text: str,
+    enable_trace: bool = False,
+) -> str:
     """
-    Fetches the parameter value from SSM Parameter Store.
+    Invoke the Bedrock Agent and return the concatenated streamed text response.
+    - Reads AGENT_ID and AGENT_ALIAS_ID from env if not provided.
+    - Does NOT use SSM Parameter Store.
     """
-    response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)
-    return response["Parameter"]["Value"]
+    # Region: let Lambda supply it
+    region = region or os.environ.get("AWS_REGION", "us-east-1")
 
+    # Prefer function args, fall back to env
+    agent_id = agent_id or os.environ.get("AGENT_ID")
+    agent_alias_id = agent_alias_id or os.environ.get("AGENT_ALIAS_ID")
 
-def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str:
-    """Invoke the Bedrock agent and aggregate the streamed response text."""
+    if not agent_id:
+        raise RuntimeError("AGENT_ID is not set (env or parameter missing)")
+    if not agent_alias_id:
+        raise RuntimeError("AGENT_ALIAS_ID is not set (env or parameter missing)")
 
-    # TODO: Update to use PowerTools SSM Params for optimization
-    agent_alias_param = get_ssm_parameter(
-        f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-alias-id-full-string"
-    ).strip()
-    agent_alias_id = agent_alias_param.split("|")[-1]
-    agent_id = get_ssm_parameter(f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id").strip()
-
-    resolved_session_id = session_id or "TempSessionBedrock"
-
-    logger.debug(
-        {
-            "message": "Invoking Bedrock agent",
-            "agent_id": agent_id,
-            "agent_alias_id": agent_alias_id,
-            "session_id": resolved_session_id,
-        }
-    )
+    rt = _runtime(region)
 
     try:
-        response = bedrock_agent_runtime_client.invoke_agent(
-            agentAliasId=agent_alias_id,
+        resp = rt.invoke_agent(
             agentId=agent_id,
-            enableTrace=False,
+            agentAliasId=agent_alias_id,
+            sessionId=session_id,
             inputText=input_text,
-            sessionId=resolved_session_id,
+            enableTrace=enable_trace,
         )
+    except (BotoCoreError, ClientError) as exc:
+        logger.exception("InvokeAgent failed")
+        msg = getattr(exc, "response", {}).get("Error", {}).get("Message") or str(exc)
+        raise RuntimeError(f"InvokeAgent failed: {msg}") from exc
 
-        stream = response.get("completion") or []
-        text_response = ""
+    stream = resp.get("completion")
+    if not stream:
+        return ""
+
+    chunks: list[str] = []
+    try:
         for event in stream:
-            if "chunk" in event and event["chunk"].get("bytes"):
-                text_response += event["chunk"]["bytes"].decode()
-            elif event.get("error"):
-                error = event["error"]
-                logger.error(
-                    {
-                        "message": "Bedrock agent returned an error",
-                        "error": error,
-                        "session_id": resolved_session_id,
-                    }
-                )
-                raise RuntimeError(f"Bedrock agent invocation failed: {error}")
-            elif event.get("returnControl"):
-                logger.debug(
-                    {
-                        "message": "Bedrock agent returned control",
-                        "session_id": resolved_session_id,
-                    }
-                )
-    except bedrock_agent_runtime_client.exceptions.AccessDeniedException as exc:
-        logger.error(
-            {
-                "message": "Access denied when invoking Bedrock agent",
-                "session_id": resolved_session_id,
-                "error": str(exc),
-            }
-        )
-        raise PermissionError("Access denied when invoking Bedrock agent") from exc
-    except EventStreamError as exc:
-        parsed_response = getattr(exc, "parsed_response", {}) or {}
-        error_type = parsed_response.get("errorType")
-        error_message = parsed_response.get("errorMessage") or str(exc)
-        logger.error(
-            {
-                "message": "Error received from Bedrock event stream",
-                "session_id": resolved_session_id,
-                "error_type": error_type,
-                "error_message": error_message,
-            }
-        )
-        if error_type and "accessdenied" in error_type.lower():
-            raise PermissionError(error_message) from exc
-        raise RuntimeError(error_message) from exc
-    except ClientError as exc:
-        logger.error(
-            {
-                "message": "Client error when invoking Bedrock agent",
-                "session_id": resolved_session_id,
-                "error": exc.response.get("Error", {}),
-            }
-        )
-        raise RuntimeError("Client error when invoking Bedrock agent") from exc
+            if (chunk := event.get("chunk")) and (data := chunk.get("bytes")):
+                try:
+                    chunks.append(data.decode("utf-8", errors="replace"))
+                except Exception:
+                    chunks.append(str(data))
+            elif (trace := event.get("trace")) is not None:
+                logger.debug({"trace": trace})
+            elif (message := event.get("message")) is not None:
+                logger.debug({"message": message})
+    except Exception as exc:
+        logger.exception("Error while reading Agent event stream")
+        raise RuntimeError("Error while reading Agent event stream") from exc
 
-    logger.info(text_response)
-
-    # TODO: Add better error handling and validations/checks
-
-    return text_response
+    return "".join(chunks).strip()
