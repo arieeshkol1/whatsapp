@@ -226,10 +226,10 @@ class ChatbotAPIStack(Stack):
             aws_iam.PolicyStatement(
                 effect=aws_iam.Effect.ALLOW,
                 actions=["bedrock:InvokeAgent"],
-                # Bedrock's InvokeAgent runtime currently requires wildcard resource access
-                # because the agent alias ARN includes both the agent and alias IDs that are
-                # only known after deployment.
-                resources=["*"],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}:{self.account}:agent/*",
+                    f"arn:aws:bedrock:{self.region}:{self.account}:agent-alias/*",
+                ],
             )
         )
 
