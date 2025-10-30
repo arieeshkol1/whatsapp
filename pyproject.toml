@@ -44,6 +44,7 @@ deploy-backend-dev = "cdk deploy investments-portfolio-tracker-backend-dev --req
 _test_unit = "coverage run -m pytest tests/unit"
 _coverage_report = "coverage report"
 _coverage_html = "coverage html"
+create-secret = "python backend/create_secret_cli.py"
 
 [tool.coverage.run]
 branch = true
