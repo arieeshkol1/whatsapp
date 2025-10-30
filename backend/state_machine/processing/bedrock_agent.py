@@ -1,5 +1,7 @@
 # Built-in imports
 import os
+from typing import Optional
+
 import boto3
 
 # Own imports
@@ -23,30 +25,60 @@ def get_ssm_parameter(parameter_name):
     return response["Parameter"]["Value"]
 
 
-def call_bedrock_agent(input_text: str) -> str:
+def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str:
+    """Invoke the Bedrock agent and aggregate the streamed response text."""
+
     # TODO: Update to use PowerTools SSM Params for optimization
-    AGENT_ALIAS_ID = get_ssm_parameter(
+    agent_alias_param = get_ssm_parameter(
         f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-alias-id-full-string"
+    ).strip()
+    agent_alias_id = agent_alias_param.split("|")[-1]
+    agent_id = get_ssm_parameter(
+        f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id"
+    ).strip()
+
+    resolved_session_id = session_id or "TempSessionBedrock"
+
+    logger.debug(
+        {
+            "message": "Invoking Bedrock agent",
+            "agent_id": agent_id,
+            "agent_alias_id": agent_alias_id,
+            "session_id": resolved_session_id,
+        }
     )
-    AGENT_ALIAS_ID = AGENT_ALIAS_ID.split("|")[-1]
-    AGENT_ID = get_ssm_parameter(f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id")
 
     response = bedrock_agent_runtime_client.invoke_agent(
-        agentAliasId=AGENT_ALIAS_ID,
-        agentId=AGENT_ID,
+        agentAliasId=agent_alias_id,
+        agentId=agent_id,
         enableTrace=False,
         inputText=input_text,
-        sessionId="TempSessionBedrock",
+        sessionId=resolved_session_id,
     )
-    logger.info(response)
 
-    stream = response.get("completion")
+    stream = response.get("completion") or []
     text_response = ""
-    if stream:
-        for event in stream:
-            chunk = event.get("chunk")
-            logger.info("-----")
-            text_response += chunk.get("bytes").decode()
+    for event in stream:
+        if "chunk" in event and event["chunk"].get("bytes"):
+            text_response += event["chunk"]["bytes"].decode()
+        elif event.get("error"):
+            error = event["error"]
+            logger.error(
+                {
+                    "message": "Bedrock agent returned an error",
+                    "error": error,
+                    "session_id": resolved_session_id,
+                }
+            )
+            raise RuntimeError(f"Bedrock agent invocation failed: {error}")
+        elif event.get("returnControl"):
+            logger.debug(
+                {
+                    "message": "Bedrock agent returned control",
+                    "session_id": resolved_session_id,
+                }
+            )
+
     logger.info(text_response)
 
     # TODO: Add better error handling and validations/checks
