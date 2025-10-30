@@ -222,6 +222,16 @@ class ChatbotAPIStack(Stack):
                 "AmazonBedrockFullAccess",
             ),
         )
+        self.lambda_state_machine_process_message.role.add_to_policy(
+            aws_iam.PolicyStatement(
+                effect=aws_iam.Effect.ALLOW,
+                actions=["bedrock:InvokeAgent"],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}:{self.account}:agent/*",
+                    f"arn:aws:bedrock:{self.region}:{self.account}:agent-alias/*",
+                ],
+            )
+        )
 
         # Lambda Function for the Bedrock Agent Group (fetch recipes)
         bedrock_agent_lambda_role = aws_iam.Role(
