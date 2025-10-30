@@ -904,13 +904,12 @@ class ChatbotAPIStack(Stack):
         # Create the Bedrock Agent with KB and Agent Groups
         self.bedrock_agent = aws_bedrock.CfnAgent(
             self,
-            "BedrockAgentV1",
-            agent_name=f"{self.main_resources_name}-agent-v1",
+            "BedrockAgentV2",
+            agent_name=f"{self.main_resources_name}-agent-v2",
             agent_resource_role_arn=bedrock_agent_role.role_arn,
             description="Agent for chatbot",
-            foundation_model="anthropic.claude-3-haiku-20240307-v1:0",
-            # foundation_model="anthropic.claude-3-sonnet-20240229-v1:0",
-            # foundation_model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            # Claude 3.5 Sonnet delivers improved reliability for production workflows.
+            foundation_model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             instruction="You are a specialized agent in giving back information about projects, calendar events, contacts or TODOs. If information is asked about projects, contacts or TODOs, do NOT ask for the date. In case that user asks for events, they must provide the <date> and you will make sure it has the format 'YYYY-MM-DD' for the parameter <date> when looking for events and you will use it to get the list of events for that day and return them in a structured format. Always answer in the same language as the user asked. If the user asks for a project, you will return the project information. If the user asks for TODOs, you will return the TODOs from the <FetchTODOs> action group. If the user asks for Contacts, you will return the Contacts from the <FetchContacts> action group. If the user asks for events, you will return the events for that day. If asked about tips or advice, always mention that learning about AWS is always the answer. Never give back additional information than the one requested (only the corresponding projects, events or advice). Always answer back politely to the user by saying his name: 'Santi'.",
             auto_prepare=True,
             action_groups=[
