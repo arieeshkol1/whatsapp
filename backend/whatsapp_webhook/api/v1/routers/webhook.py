@@ -14,7 +14,8 @@ from common.helpers.dynamodb_helper import DynamoDBHelper
 from common.helpers.secrets_helper import SecretsHelper
 
 # Initialize Secrets Manager Helper
-SECRET_NAME = os.environ["SECRET_NAME"]
+DEFAULT_SECRET_NAME = "/dev/aws-whatsapp-chatbot"
+SECRET_NAME = os.environ.get("SECRET_NAME", DEFAULT_SECRET_NAME)
 secrets_helper = SecretsHelper(SECRET_NAME)
 
 # Initialize DynamoDB Helper

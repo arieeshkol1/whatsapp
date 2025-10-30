@@ -4,11 +4,36 @@ In order to correctly configure the AWS account and manual steps (only once), fo
 
 ## Configure Secrets Manager Secret
 
-Create an AWS Secret that will contain the required tokens/credentials for connecting AWS and Meta APIs.
+Create an AWS Secrets Manager entry (for example `/dev/aws-whatsapp-chatbot`) that will contain the
+required tokens/credentials for connecting AWS and Meta APIs. The deployed Lambdas reference the
+secret through the `SECRET_NAME` environment variable, so make sure to store the values in Secrets
+Manager rather than committing them to the repository or setting them directly on the functions.
 
-This can be done with the following AWS CLI command:
+The helper shipped in this repository creates or updates the JSON document for you:
 
-TODO: Add AWS CLI command with the example secret creation (with necessary keys/values template)
+```bash
+python backend/create_secret_cli.py \
+  --secret-name /dev/aws-whatsapp-chatbot \
+  --verify-token <verify-token-shared-with-meta> \
+  --meta-token <long-lived-meta-token> \
+  --phone-number-id <meta-phone-number-id>
+```
+
+By default the script writes the following keys into the secret:
+
+```json
+{
+  "AWS_API_KEY_TOKEN": "...",
+  "META_TOKEN": "...",
+  "META_FROM_PHONE_NUMBER_ID": "..."
+}
+```
+
+If you need to store additional values (for example, `META_BASE_URL`), pass
+`--extra META_BASE_URL=https://graph.facebook.com/v20.0` and repeat `--extra` for each additional
+key/value pair. The CLI prints only the key names after it runs so your sensitive values stay hidden
+from logs. You can also create the secret manually from the AWS console as long as you keep the same
+JSON structure.
 
 ## Create the deployment role
 
