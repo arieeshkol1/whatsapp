@@ -1,0 +1,106 @@
+name: Auto approve and deploy Codex pull requests
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_DEFAULT_OUTPUT: json
+  DEPLOYMENT_ENVIRONMENT: dev
+
+jobs:
+  detect-codex-author:
+    name: Detect Codex pull request author
+    runs-on: ubuntu-latest
+    outputs:
+      is-codex: ${{ steps.check.outputs.is-codex }}
+    steps:
+      - name: Check out pull request HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Determine commit author email
+        id: check
+        run: |
+          author_email=$(git show -s --format='%ae' "${{ github.event.pull_request.head.sha }}")
+          if [ "$author_email" = "codex@openai.com" ]; then
+            echo "is-codex=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "is-codex=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  auto-approve:
+    name: Auto approve Codex pull request
+    needs: detect-codex-author
+    if: needs.detect-codex-author.outputs.is-codex == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Approve pull request
+        uses: hmarr/auto-approve-action@v4
+        with:
+          pull-request-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          review-message: Automatically approving Codex pull request.
+
+  deploy-dev:
+    name: Deploy Codex pull request to dev
+    needs:
+      - detect-codex-author
+      - auto-approve
+    if: needs.detect-codex-author.outputs.is-codex == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Check out pull request HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Install Poetry dependencies
+        run: poetry install --no-interaction
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk
+
+      - name: Configure AWS credentials for dev
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::${{ secrets.DEV_AWS_ACCOUNT_ID }}:role/${{ secrets.DEV_AWS_DEPLOY_ROLE }}
+          role-session-name: CodexPullRequestDeployment
+          role-skip-session-tagging: true
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Deploy CDK stack to dev
+        run: |
+          source .venv/bin/activate
+          cdk deploy --require-approval never
