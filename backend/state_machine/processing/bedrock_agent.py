@@ -33,9 +33,7 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
         f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-alias-id-full-string"
     ).strip()
     agent_alias_id = agent_alias_param.split("|")[-1]
-    agent_id = get_ssm_parameter(
-        f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id"
-    ).strip()
+    agent_id = get_ssm_parameter(f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id").strip()
 
     resolved_session_id = session_id or "TempSessionBedrock"
 
