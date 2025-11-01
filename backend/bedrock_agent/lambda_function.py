@@ -11,7 +11,7 @@ PAIRINGS_PK = "PAIRINGS#HAVITUSH"
 BUNDLES_PK = "BUNDLES#HAVITUSH"
 
 
-def _sanitize_sort_key_portion(raw_value: Optional[str]) -> str:
+def _sanitize_sort_key_portion(raw_value: str | None) -> str:
     if not raw_value:
         return ""
     cleaned = raw_value.strip().upper()
@@ -19,9 +19,10 @@ def _sanitize_sort_key_portion(raw_value: Optional[str]) -> str:
 
 
 def _stringify_items(
-    items: List[Dict], detail_key: str, fallback_message: str
-) -> List[str]:
-    results: List[str] = []
+    items: list[dict], detail_key: str, fallback_message: str
+) -> list[str]:
+def _stringify_items(items: list[dict], detail_key: str, fallback_message: str) -> list[str]:
+    results: list[str] = []
     for item in items:
         details = item.get(detail_key)
         if isinstance(details, dict):
@@ -31,6 +32,7 @@ def _stringify_items(
             fragments = [
                 fragment for fragment in [name, description, price] if fragment
             ]
+            fragments = [fragment for fragment in [name, description, price] if fragment]
             if fragments:
                 results.append(" - ".join(fragments))
                 continue
@@ -61,10 +63,7 @@ def action_group_lookup_catalog(parameters):
     return _stringify_items(
         items,
         detail_key="catalog_details",
-        fallback_message=(
-            "No catalog entries were found for that description. "
-            "Share more details and I'll keep looking!"
-        ),
+        fallback_message="No catalog entries were found for that description. Share more details and I'll keep looking!",
     )
 
 
@@ -84,12 +83,15 @@ def action_group_suggest_pairings(parameters):
     return _stringify_items(
         items,
         detail_key="pairing_suggestions",
-        fallback_message=(
-            "I don't have curated pairings yet for that drink. "
-            "Let me know the flavor profile and I'll craft ideas for you!"
-        ),
+        fallback_message="I don't have curated pairings yet for that drink. Let me know the flavor profile and I'll craft ideas for you!",
     )
 
+def action_group_suggest_pairings(parameters):
+    drink_name = None
+    for param in parameters:
+        if param["name"] == "drink_name":
+            drink_name = param["value"]
+            break
 
 def action_group_create_bundles(parameters):
     theme = None
@@ -113,10 +115,7 @@ def action_group_create_bundles(parameters):
     return _stringify_items(
         items,
         detail_key="bundle_recommendations",
-        fallback_message=(
-            "I couldn't find a ready-made bundle for that occasion. "
-            "Would you like me to craft one manually?"
-        ),
+        fallback_message="I couldn't find a ready-made bundle for that occasion. Would you like me to craft one manually?",
     )
 
 
