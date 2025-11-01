@@ -40,7 +40,7 @@ class ProcessText(BaseStepFunction):
         # TODO: Update "acnowledged" message to a more complex response
         # TODO: Add more complex "text processing" logic here with memory and sessions...
         self.response_message = call_bedrock_agent(
-            self.text, session_id=self.correlation_id
+            input_text=self.text, session_id=self.correlation_id
         )
 
         self.logger.info(f"Generated response message: {self.response_message}")
