@@ -1,6 +1,8 @@
 # NOTE: This is a super-MVP code for testing. Still has a lot of gaps to solve/fix. Do not use in prod.
 # TODO: Refactor solution to a standalone router for all Action Groups
 
+from typing import Dict, List, Optional
+
 from bedrock_agent.dynamodb_helper import query_dynamodb_pk_sk
 
 
