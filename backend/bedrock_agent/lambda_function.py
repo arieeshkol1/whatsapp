@@ -16,6 +16,9 @@ def _sanitize_sort_key_portion(raw_value: str | None) -> str:
     return cleaned.replace(" ", "#")
 
 
+def _stringify_items(
+    items: list[dict], detail_key: str, fallback_message: str
+) -> list[str]:
 def _stringify_items(items: list[dict], detail_key: str, fallback_message: str) -> list[str]:
     results: list[str] = []
     for item in items:
@@ -24,6 +27,9 @@ def _stringify_items(items: list[dict], detail_key: str, fallback_message: str) 
             name = details.get("name") or details.get("title")
             description = details.get("description")
             price = details.get("price")
+            fragments = [
+                fragment for fragment in [name, description, price] if fragment
+            ]
             fragments = [fragment for fragment in [name, description, price] if fragment]
             if fragments:
                 results.append(" - ".join(fragments))
@@ -78,6 +84,12 @@ def action_group_suggest_pairings(parameters):
         fallback_message="I don't have curated pairings yet for that drink. Let me know the flavor profile and I'll craft ideas for you!",
     )
 
+def action_group_suggest_pairings(parameters):
+    drink_name = None
+    for param in parameters:
+        if param["name"] == "drink_name":
+            drink_name = param["value"]
+            break
 
 def action_group_create_bundles(parameters):
     theme = None
