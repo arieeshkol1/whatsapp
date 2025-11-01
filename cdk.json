@@ -17,7 +17,9 @@
         "secret_name": "/dev/aws-whatsapp-chatbot",
         "comment": "Update the <enable_rag> to <true> in case that support for RAG with PDFs is required. Warning: could be expensive.",
         "enable_rag": false,
-        "meta_endpoint": "https://graph.facebook.com/"
+        "meta_endpoint": "https://graph.facebook.com/",
+        "bedrock_agent_foundation_model_id": "anthropic.claude-3-haiku-20240307-v1:0",
+        "bedrock_agent_inference_profile_arn": null
       },
       "prod": {
         "deployment_environment": "prod",
@@ -28,7 +30,9 @@
         "secret_name": "/prod/aws-whatsapp-chatbot",
         "comment": "Update the <enable_rag> to <true> in case that support for RAG with PDFs is required. Warning: could be expensive.",
         "enable_rag": false,
-        "meta_endpoint": "https://graph.facebook.com/"
+        "meta_endpoint": "https://graph.facebook.com/",
+        "bedrock_agent_foundation_model_id": "anthropic.claude-3-haiku-20240307-v1:0",
+        "bedrock_agent_inference_profile_arn": null
       }
     }
   }
