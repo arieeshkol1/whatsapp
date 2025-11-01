@@ -1,5 +1,6 @@
 # Built-in imports
 import os
+from typing import Any, Dict
 
 # External imports
 from aws_cdk import (
@@ -38,14 +39,14 @@ class ChatbotAPIStack(Stack):
         scope: Construct,
         construct_id: str,
         main_resources_name: str,
-        app_config: dict[str],
+        app_config: Dict[str, Any],
         **kwargs,
     ) -> None:
         """
         :param scope (Construct): Parent of this stack, usually an 'App' or a 'Stage', but could be any construct.
         :param construct_id (str): The construct ID of this stack (same as aws-cdk Stack 'construct_id').
         :param main_resources_name (str): The main unique identified of this stack.
-        :param app_config (dict[str]): Dictionary with relevant configuration values for the stack.
+        :param app_config (Dict[str, Any]): Dictionary with relevant configuration values for the stack.
         """
         super().__init__(scope, construct_id, **kwargs)
 
