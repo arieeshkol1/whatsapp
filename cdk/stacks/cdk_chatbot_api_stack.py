@@ -2,7 +2,11 @@
 import os
 from typing import Any, Dict
 
-DEFAULT_AGENT_FOUNDATION_MODEL_ID = "anthropic.claude-3-5-haiku-20241022-v1:0"
+DEFAULT_AGENT_FOUNDATION_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+FALLBACK_AGENT_FOUNDATION_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+MODELS_REQUIRING_INFERENCE_PROFILE = {
+    "anthropic.claude-3-5-haiku-20241022-v1:0",
+}
 
 # External imports
 from aws_cdk import (
@@ -66,6 +70,9 @@ class ChatbotAPIStack(Stack):
         )
         self.bedrock_agent_inference_profile_arn = self.app_config.get(
             "bedrock_agent_inference_profile_arn"
+        )
+        self.bedrock_agent_effective_foundation_model_id = (
+            self._resolve_bedrock_foundation_model_id()
         )
 
         # Main methods for the deployment
@@ -923,8 +930,8 @@ class ChatbotAPIStack(Stack):
             agent_name=f"{self.main_resources_name}-havitush-agent",
             agent_resource_role_arn=bedrock_agent_role.role_arn,
             description="Conversational agent for the Havitush online drinks store.",
-            # Latest Claude Haiku model for fast, high-quality responses.
-            foundation_model=self.bedrock_agent_foundation_model_id,
+            # Claude Haiku model configured for fast, high-quality responses.
+            foundation_model=self.bedrock_agent_effective_foundation_model_id,
             instruction="""
 You are Havitush, a warm and knowledgeable digital sommelier for the Havitush online drinks boutique. Always greet guests in their language, learn their preferences, and recommend beverages, pairings, and bundles that match their taste, occasion, and budget. Highlight unique tasting notes, origins, and serving tips. Offer to suggest cocktail recipes or gift ideas when relevant. Confirm availability by referencing your catalog knowledge and be transparent when information is missing. Close every conversation by inviting the guest to explore more Havitush drinks or ask for further recommendations.
 """,
@@ -1052,6 +1059,40 @@ You are Havitush, a warm and knowledgeable digital sommelier for the Havitush on
             parameter_name=f"/{self.deployment_environment}/aws-wpp/bedrock-agent-id",
             string_value=self.bedrock_agent.ref,
         )
+
+        if self.bedrock_agent_inference_profile_arn:
+            aws_ssm.StringParameter(
+                self,
+                "SSMAgentInferenceProfileArn",
+                parameter_name=(
+                    f"/{self.deployment_environment}/aws-wpp/bedrock-agent-inference-profile-arn"
+                ),
+                string_value=self.bedrock_agent_inference_profile_arn,
+            )
+
+    def _resolve_bedrock_foundation_model_id(self) -> str:
+        """Return the model identifier that should back the agent orchestration step."""
+
+        configured_model = self.bedrock_agent_foundation_model_id or (
+            DEFAULT_AGENT_FOUNDATION_MODEL_ID
+        )
+
+        if self.bedrock_agent_inference_profile_arn:
+            return configured_model
+
+        if configured_model in MODELS_REQUIRING_INFERENCE_PROFILE:
+            self.node.add_warning(
+                "Foundation model %s requires an inference profile. Falling back to %s for"
+                " on-demand throughput. Update app_config with an inference profile ARN to"
+                " restore the preferred model."
+                % (
+                    configured_model,
+                    FALLBACK_AGENT_FOUNDATION_MODEL_ID,
+                )
+            )
+            return FALLBACK_AGENT_FOUNDATION_MODEL_ID
+
+        return configured_model
 
     def generate_cloudformation_outputs(self) -> None:
         """
