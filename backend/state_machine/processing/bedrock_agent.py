@@ -1,5 +1,7 @@
 # state_machine/processing/bedrock_agent.py
 import os
+from typing import List, Optional
+
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from aws_lambda_powertools import Logger
@@ -13,9 +15,9 @@ def _runtime(region: str):
 
 def call_bedrock_agent(
     *,
-    region: str | None = None,
-    agent_id: str | None = None,
-    agent_alias_id: str | None = None,
+    region: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    agent_alias_id: Optional[str] = None,
     session_id: str,
     input_text: str,
     enable_trace: bool = False,
@@ -56,7 +58,7 @@ def call_bedrock_agent(
     if not stream:
         return ""
 
-    chunks: list[str] = []
+    chunks: List[str] = []
     try:
         for event in stream:
             if (chunk := event.get("chunk")) and (data := chunk.get("bytes")):
