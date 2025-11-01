@@ -1,5 +1,8 @@
 # Built-in imports
 import os
+from typing import Any, Dict
+
+DEFAULT_AGENT_FOUNDATION_MODEL_ID = "anthropic.claude-3-5-haiku-20241022-v1:0"
 
 # External imports
 from aws_cdk import (
@@ -38,14 +41,14 @@ class ChatbotAPIStack(Stack):
         scope: Construct,
         construct_id: str,
         main_resources_name: str,
-        app_config: dict[str],
+        app_config: Dict[str, Any],
         **kwargs,
     ) -> None:
         """
         :param scope (Construct): Parent of this stack, usually an 'App' or a 'Stage', but could be any construct.
         :param construct_id (str): The construct ID of this stack (same as aws-cdk Stack 'construct_id').
         :param main_resources_name (str): The main unique identified of this stack.
-        :param app_config (dict[str]): Dictionary with relevant configuration values for the stack.
+        :param app_config (Dict[str, Any]): Dictionary with relevant configuration values for the stack.
         """
         super().__init__(scope, construct_id, **kwargs)
 
@@ -57,6 +60,13 @@ class ChatbotAPIStack(Stack):
 
         # Parameter to enable/disable RAG
         self.enable_rag = self.app_config["enable_rag"]
+        self.bedrock_agent_foundation_model_id = self.app_config.get(
+            "bedrock_agent_foundation_model_id",
+            DEFAULT_AGENT_FOUNDATION_MODEL_ID,
+        )
+        self.bedrock_agent_inference_profile_arn = self.app_config.get(
+            "bedrock_agent_inference_profile_arn"
+        )
 
         # Main methods for the deployment
         self.import_secrets()
@@ -905,30 +915,31 @@ class ChatbotAPIStack(Stack):
         self.bedrock_agent = aws_bedrock.CfnAgent(
             self,
             "BedrockAgentV2",
-            agent_name=f"{self.main_resources_name}-agent-v2",
+            agent_name=f"{self.main_resources_name}-havitush-agent",
             agent_resource_role_arn=bedrock_agent_role.role_arn,
-            description="Agent for chatbot",
-            # Claude 3.5 Sonnet delivers improved reliability for production workflows.
-            foundation_model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            instruction="You are a specialized agent in giving back information about projects, calendar events, contacts or TODOs. If information is asked about projects, contacts or TODOs, do NOT ask for the date. In case that user asks for events, they must provide the <date> and you will make sure it has the format 'YYYY-MM-DD' for the parameter <date> when looking for events and you will use it to get the list of events for that day and return them in a structured format. Always answer in the same language as the user asked. If the user asks for a project, you will return the project information. If the user asks for TODOs, you will return the TODOs from the <FetchTODOs> action group. If the user asks for Contacts, you will return the Contacts from the <FetchContacts> action group. If the user asks for events, you will return the events for that day. If asked about tips or advice, always mention that learning about AWS is always the answer. Never give back additional information than the one requested (only the corresponding projects, events or advice). Always answer back politely to the user by saying his name: 'Santi'.",
+            description="Conversational agent for the Havitush online drinks store.",
+            # Latest Claude Haiku model for fast, high-quality responses.
+            foundation_model=self.bedrock_agent_foundation_model_id,
+            instruction="""
+You are Havitush, a warm and knowledgeable digital sommelier for the Havitush online drinks boutique. Always greet guests in their language, learn their preferences, and recommend beverages, pairings, and bundles that match their taste, occasion, and budget. Highlight unique tasting notes, origins, and serving tips. Offer to suggest cocktail recipes or gift ideas when relevant. Confirm availability by referencing your catalog knowledge and be transparent when information is missing. Close every conversation by inviting the guest to explore more Havitush drinks or ask for further recommendations.
+""",
             auto_prepare=True,
             action_groups=[
                 aws_bedrock.CfnAgent.AgentActionGroupProperty(
-                    action_group_name="FetchCalendarEvents",
-                    description="A function that is able to fetch the calendar events from the database from an input date.",
+                    action_group_name="LookupCatalog",
+                    description="Retrieves beverage catalog entries for Havitush customers.",
                     action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
                         lambda_=self.lambda_action_groups.function_arn,
                     ),
                     function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
                         functions=[
                             aws_bedrock.CfnAgent.FunctionProperty(
-                                name="FetchCalendarEvents",
-                                # the properties below are optional
-                                description="Function to fetch the calendar events based on the input input date",
+                                name="LookupCatalog",
+                                description="Fetch detailed catalog information for the requested drink or bundle.",
                                 parameters={
-                                    "date": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                    "query": aws_bedrock.CfnAgent.ParameterDetailProperty(
                                         type="string",
-                                        description="Date to fetch the calendar events",
+                                        description="Free text describing the beverage or characteristics to search.",
                                         required=True,
                                     ),
                                 },
@@ -937,33 +948,50 @@ class ChatbotAPIStack(Stack):
                     ),
                 ),
                 aws_bedrock.CfnAgent.AgentActionGroupProperty(
-                    action_group_name="FetchTODOs",
-                    description="A function that is able to fetch the TODOs from the database.",
+                    action_group_name="SuggestPairings",
+                    description="Provides curated food or mixer pairings for Havitush beverages.",
                     action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
                         lambda_=self.lambda_action_groups.function_arn,
                     ),
                     function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
                         functions=[
                             aws_bedrock.CfnAgent.FunctionProperty(
-                                name="FetchTODOs",
-                                # the properties below are optional
-                                description="Function to fetch the TODOs",
+                                name="SuggestPairings",
+                                description="Return pairing ideas tailored to the selected drink.",
+                                parameters={
+                                    "drink_name": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Exact drink name to pair recommendations with.",
+                                        required=True,
+                                    ),
+                                },
                             )
                         ]
                     ),
                 ),
                 aws_bedrock.CfnAgent.AgentActionGroupProperty(
-                    action_group_name="FetchContacts",
-                    description="A function that is able to fetch the Contacts from the database.",
+                    action_group_name="CreateBundles",
+                    description="Curates bundles or gift sets for Havitush shoppers.",
                     action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
                         lambda_=self.lambda_action_groups.function_arn,
                     ),
                     function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
                         functions=[
                             aws_bedrock.CfnAgent.FunctionProperty(
-                                name="FetchContacts",
-                                # the properties below are optional
-                                description="Function to fetch the Contacts",
+                                name="CreateBundles",
+                                description="Generate a themed drink bundle based on customer preferences.",
+                                parameters={
+                                    "theme": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Occasion or flavor theme for the bundle.",
+                                        required=True,
+                                    ),
+                                    "budget": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Optional budget guidance shared by the customer.",
+                                        required=False,
+                                    ),
+                                },
                             )
                         ]
                     ),
@@ -973,7 +1001,7 @@ class ChatbotAPIStack(Stack):
                 [
                     (
                         aws_bedrock.CfnAgent.AgentKnowledgeBaseProperty(
-                            description="The knowledge base for the agent that contains the relevant projects of the user.",
+                            description="Knowledge base with curated tasting notes, catalog entries, and brand storytelling for Havitush drinks.",
                             knowledge_base_id=bedrock_knowledge_base.ref,
                         )
                     ),
@@ -983,13 +1011,22 @@ class ChatbotAPIStack(Stack):
             ),
         )
 
+        if self.bedrock_agent_inference_profile_arn:
+            # The CloudFormation property was introduced before CDK exposed a typed field.
+            # Manually override the synthesized template so Bedrock uses the required
+            # inference profile when invoking the foundation model.
+            self.bedrock_agent.add_override(
+                "Properties.InferenceProfileArn",
+                self.bedrock_agent_inference_profile_arn,
+            )
+
         # Create an alias for the bedrock agent
         cfn_agent_alias = aws_bedrock.CfnAgentAlias(
             self,
             "MyCfnAgentAlias",
-            agent_alias_name="bedrock-agent-alias",
+            agent_alias_name="havitush-agent-alias",
             agent_id=self.bedrock_agent.ref,
-            description="bedrock agent alias to simplify agent invocation",
+            description="Alias for invoking the Havitush Bedrock agent",
         )
         cfn_agent_alias.add_dependency(self.bedrock_agent)
 
