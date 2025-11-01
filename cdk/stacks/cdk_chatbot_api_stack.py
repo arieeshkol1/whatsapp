@@ -2,6 +2,8 @@
 import os
 from typing import Any, Dict
 
+DEFAULT_AGENT_FOUNDATION_MODEL_ID = "anthropic.claude-3-5-haiku-20241022-v1:0"
+
 # External imports
 from aws_cdk import (
     Duration,
@@ -58,6 +60,13 @@ class ChatbotAPIStack(Stack):
 
         # Parameter to enable/disable RAG
         self.enable_rag = self.app_config["enable_rag"]
+        self.bedrock_agent_foundation_model_id = self.app_config.get(
+            "bedrock_agent_foundation_model_id",
+            DEFAULT_AGENT_FOUNDATION_MODEL_ID,
+        )
+        self.bedrock_agent_inference_profile_arn = self.app_config.get(
+            "bedrock_agent_inference_profile_arn"
+        )
 
         # Main methods for the deployment
         self.import_secrets()
@@ -903,6 +912,11 @@ class ChatbotAPIStack(Stack):
         # # ... (manual for now when docs refreshed... could be automated)
 
         # Create the Bedrock Agent with KB and Agent Groups
+        foundation_model_identifier = (
+            self.bedrock_agent_inference_profile_arn
+            or self.bedrock_agent_foundation_model_id
+        )
+
         self.bedrock_agent = aws_bedrock.CfnAgent(
             self,
             "BedrockAgentV2",
@@ -910,7 +924,7 @@ class ChatbotAPIStack(Stack):
             agent_resource_role_arn=bedrock_agent_role.role_arn,
             description="Conversational agent for the Havitush online drinks store.",
             # Latest Claude Haiku model for fast, high-quality responses.
-            foundation_model="anthropic.claude-3-5-haiku-20241022-v1:0",
+            foundation_model=foundation_model_identifier,
             instruction="""
 You are Havitush, a warm and knowledgeable digital sommelier for the Havitush online drinks boutique. Always greet guests in their language, learn their preferences, and recommend beverages, pairings, and bundles that match their taste, occasion, and budget. Highlight unique tasting notes, origins, and serving tips. Offer to suggest cocktail recipes or gift ideas when relevant. Confirm availability by referencing your catalog knowledge and be transparent when information is missing. Close every conversation by inviting the guest to explore more Havitush drinks or ask for further recommendations.
 """,
