@@ -912,6 +912,11 @@ class ChatbotAPIStack(Stack):
         # # ... (manual for now when docs refreshed... could be automated)
 
         # Create the Bedrock Agent with KB and Agent Groups
+        foundation_model_identifier = (
+            self.bedrock_agent_inference_profile_arn
+            or self.bedrock_agent_foundation_model_id
+        )
+
         self.bedrock_agent = aws_bedrock.CfnAgent(
             self,
             "BedrockAgentV2",
