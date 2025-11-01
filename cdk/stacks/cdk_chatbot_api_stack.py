@@ -924,7 +924,7 @@ class ChatbotAPIStack(Stack):
             agent_resource_role_arn=bedrock_agent_role.role_arn,
             description="Conversational agent for the Havitush online drinks store.",
             # Latest Claude Haiku model for fast, high-quality responses.
-            foundation_model=foundation_model_identifier,
+            foundation_model=self.bedrock_agent_foundation_model_id,
             instruction="""
 You are Havitush, a warm and knowledgeable digital sommelier for the Havitush online drinks boutique. Always greet guests in their language, learn their preferences, and recommend beverages, pairings, and bundles that match their taste, occasion, and budget. Highlight unique tasting notes, origins, and serving tips. Offer to suggest cocktail recipes or gift ideas when relevant. Confirm availability by referencing your catalog knowledge and be transparent when information is missing. Close every conversation by inviting the guest to explore more Havitush drinks or ask for further recommendations.
 """,
@@ -1015,6 +1015,15 @@ You are Havitush, a warm and knowledgeable digital sommelier for the Havitush on
                 else None
             ),
         )
+
+        if self.bedrock_agent_inference_profile_arn:
+            # The CloudFormation property was introduced before CDK exposed a typed field.
+            # Manually override the synthesized template so Bedrock uses the required
+            # inference profile when invoking the foundation model.
+            self.bedrock_agent.add_override(
+                "Properties.InferenceProfileArn",
+                self.bedrock_agent_inference_profile_arn,
+            )
 
         # Create an alias for the bedrock agent
         cfn_agent_alias = aws_bedrock.CfnAgentAlias(
