@@ -674,6 +674,7 @@ class ChatbotAPIStack(Stack):
                 effect=aws_iam.Effect.ALLOW,
                 actions=[
                     "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
                     "bedrock:InvokeModelEndpoint",
                     "bedrock:InvokeModelEndpointAsync",
                 ],
