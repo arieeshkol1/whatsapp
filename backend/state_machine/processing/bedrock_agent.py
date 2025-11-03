@@ -14,7 +14,7 @@ def _runtime(region: str):
 
 
 def call_bedrock_agent(
-    *,
+    *ignored_args: object,
     region: Optional[str] = None,
     agent_id: Optional[str] = None,
     agent_alias_id: Optional[str] = None,
@@ -26,7 +26,15 @@ def call_bedrock_agent(
     Invoke the Bedrock Agent and return the concatenated streamed text response.
     - Reads AGENT_ID and AGENT_ALIAS_ID from env if not provided.
     - Does NOT use SSM Parameter Store.
+    - Accepts and ignores any positional arguments for backwards compatibility with
+      older call sites that passed the event payload positionally.
     """
+    if ignored_args:
+        logger.debug(
+            "call_bedrock_agent received unexpected positional args; ignoring",
+            extra={"positional_arg_count": len(ignored_args)},
+        )
+
     # Region: let Lambda supply it
     region = region or os.environ.get("AWS_REGION", "us-east-1")
 
