@@ -4,6 +4,7 @@ from typing import Tuple
 
 import boto3
 import requests
+from botocore.exceptions import ClientError
 
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
@@ -38,7 +39,25 @@ def _load_secret_json() -> dict:
             "SECRET_NAME env var is required (Secrets Manager name/ARN)."
         )
 
-    resp = secrets.get_secret_value(SecretId=secret_name)
+    version_stage = os.environ.get("SECRET_VERSION_STAGE", "AWSCURRENT")
+    try:
+        resp = secrets.get_secret_value(
+            SecretId=secret_name, VersionStage=version_stage
+        )
+    except ClientError as exc:
+        logger.error(
+            "Failed to fetch secret",
+            extra={
+                "secret_name": secret_name,
+                "version_stage": version_stage,
+                "error_code": getattr(exc, "response", {})
+                .get("Error", {})
+                .get("Code"),
+            },
+        )
+        raise RuntimeError(
+            "Unable to retrieve WhatsApp credentials from Secrets Manager"
+        ) from exc
     if "SecretString" not in resp:
         raise RuntimeError("Secret is binary; expected a plaintext JSON SecretString.")
     try:
@@ -185,12 +204,14 @@ class SendMessage(BaseStepFunction):
 
         # Try 1: use current secret
         token, phone_id, base_url = _get_creds_from_secret()
+        version_stage = os.environ.get("SECRET_VERSION_STAGE", "AWSCURRENT")
         self.logger.info(
             "Using WA creds",
             extra={
                 "source": "secretsmanager",
                 "phone_id_tail": str(phone_id)[-4:],
                 "base_url": base_url,
+                "secret_version_stage": version_stage,
             },
         )
 
