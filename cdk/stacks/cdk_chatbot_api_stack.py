@@ -2,8 +2,8 @@
 import os
 from typing import Any, Dict
 
-DEFAULT_AGENT_FOUNDATION_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
-FALLBACK_AGENT_FOUNDATION_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+DEFAULT_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
+FALLBACK_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
 MODELS_REQUIRING_INFERENCE_PROFILE = {
     "anthropic.claude-3-5-haiku-20241022-v1:0",
 }
@@ -931,7 +931,7 @@ class ChatbotAPIStack(Stack):
             agent_name=f"{self.main_resources_name}-havitush-agent",
             agent_resource_role_arn=bedrock_agent_role.role_arn,
             description="Conversational agent for the Havitush online drinks store.",
-            # Claude Haiku model configured for fast, high-quality responses.
+            # Amazon Nova Lite model configured for fast, high-quality responses.
             foundation_model=self.bedrock_agent_effective_foundation_model_id,
             instruction="""
 You are Havitush, a warm and knowledgeable digital sommelier for the Havitush online drinks boutique. Always greet guests in their language, learn their preferences, and recommend beverages, pairings, and bundles that match their taste, occasion, and budget. Highlight unique tasting notes, origins, and serving tips. Offer to suggest cocktail recipes or gift ideas when relevant. Confirm availability by referencing your catalog knowledge and be transparent when information is missing. Close every conversation by inviting the guest to explore more Havitush drinks or ask for further recommendations.
