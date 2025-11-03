@@ -30,10 +30,13 @@ class ProcessVoice(BaseStepFunction):
 
         # TODO: Add real voice to text conversion here...
 
-        self.text = "NOT IMPLEMENTED. PLEASE ANSWER: <I am not able to process voice messages yet>."
+        self.response_message = "אני עדיין לא יכול לעבד הודעות קוליות. אנא שלחו הודעת טקסט בעברית כדי שאוכל לעזור."
 
-        self.logger.info(f"Generated response message: {self.text}")
+        self.logger.info(
+            "Generated response message for voice input",
+            extra={"response": self.response_message},
+        )
 
-        self.event["input"]["dynamodb"]["NewImage"]["S"] = self.text
+        self.event["response_message"] = self.response_message
 
         return self.event
