@@ -1,18 +1,11 @@
-# Built-in imports
-from datetime import datetime
-import re
-from textwrap import dedent
-
 # Own imports
 from state_machine.base_step_function import BaseStepFunction
-from common.enums import WhatsAppMessageTypes
 from common.logger import custom_logger
 
 from state_machine.processing.bedrock_agent import call_bedrock_agent
 
 
 logger = custom_logger()
-ALLOWED_MESSAGE_TYPES = WhatsAppMessageTypes.__members__
 
 HEBREW_PATTERN = re.compile(r"[א-ת]")
 HEBREW_INPUT_REQUIRED_MESSAGE = "אנא שלחו את בקשתכם בעברית כדי שאוכל לסייע."
@@ -57,35 +50,15 @@ class ProcessText(BaseStepFunction):
             .get("dynamodb", {})
             .get("NewImage", {})
             .get("text", {})
-            .get("S", "")
-        ).strip()
+            .get("S", "DEFAULT_RESPONSE")
+        )
 
-        if not self.text or not HEBREW_PATTERN.search(self.text):
-            self.logger.info(
-                "Incoming message is missing Hebrew characters; sending guidance",
-                extra={"sample": self.text[:30]},
-            )
-            self.response_message = HEBREW_INPUT_REQUIRED_MESSAGE
-        else:
-            augmented_prompt = (
-                f"הודעת לקוח: {self.text}\n\n"
-                f"הנחיות סוכן:\n{AGENT_RULES_PROMPT}\n\n"
-                "אנא הגב בעברית בלבד בסגנון חם, שקוף ומקצועי של חביתוש."
-                " סכם כל שלב והצע סיוע נוסף במידת הצורך."
-            )
-            self.response_message = call_bedrock_agent(
-                session_id=self.correlation_id,
-                input_text=augmented_prompt,
-            )
-
-            if not self.response_message or not HEBREW_PATTERN.search(
-                self.response_message
-            ):
-                self.logger.warning(
-                    "Agent response missing Hebrew characters; using fallback",
-                    extra={"response_preview": (self.response_message or "")[:50]},
-                )
-                self.response_message = HEBREW_OUTPUT_FALLBACK_MESSAGE
+        # TODO: Update "acnowledged" message to a more complex response
+        # TODO: Add more complex "text processing" logic here with memory and sessions...
+        self.response_message = call_bedrock_agent(
+            session_id=self.correlation_id,
+            input_text=self.text,
+        )
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")

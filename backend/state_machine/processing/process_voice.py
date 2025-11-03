@@ -1,16 +1,9 @@
-# Built-in imports
-from datetime import datetime
-
 # Own imports
 from state_machine.base_step_function import BaseStepFunction
-from common.enums import WhatsAppMessageTypes
 from common.logger import custom_logger
-
-from state_machine.processing.bedrock_agent import call_bedrock_agent
 
 
 logger = custom_logger()
-ALLOWED_MESSAGE_TYPES = WhatsAppMessageTypes.__members__
 
 
 class ProcessVoice(BaseStepFunction):
@@ -30,13 +23,13 @@ class ProcessVoice(BaseStepFunction):
 
         # TODO: Add real voice to text conversion here...
 
-        self.response_message = "אני עדיין לא יכול לעבד הודעות קוליות. אנא שלחו הודעת טקסט בעברית כדי שאוכל לעזור."
-
-        self.logger.info(
-            "Generated response message for voice input",
-            extra={"response": self.response_message},
+        response_text = (
+            "NOT IMPLEMENTED. PLEASE ANSWER: "
+            "<I am not able to process voice messages yet>."
         )
 
-        self.event["response_message"] = self.response_message
+        self.logger.info(f"Generated response message: {response_text}")
+
+        self.event["response_message"] = response_text
 
         return self.event
