@@ -18,24 +18,92 @@ def _ssm(region: str):
     return boto3.client("ssm", region_name=region)
 
 
+def _safe_strip(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _resolve_environment() -> Optional[str]:
+    """Best-effort environment resolution for Parameter Store lookups."""
+
+    env = _safe_strip(os.environ.get("ENVIRONMENT"))
+    if env:
+        return env
+
+    secret_name = _safe_strip(os.environ.get("SECRET_NAME"))
+    if secret_name:
+        trimmed = secret_name.strip("/")
+        if trimmed:
+            return _safe_strip(trimmed.split("/", 1)[0])
+
+    return None
+
+
+def _resolve_namespace() -> Optional[str]:
+    """Infer the resource namespace ("aws-wpp") for SSM parameter construction."""
+
+    override = _safe_strip(os.environ.get("BEDROCK_AGENT_PARAMETER_NAMESPACE"))
+    if override:
+        return override
+
+    function_name = _safe_strip(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    if function_name:
+        parts = [segment for segment in function_name.split("-") if segment]
+        if len(parts) >= 2:
+            return "-".join(parts[:2])
+        if parts:
+            return parts[0]
+
+    return "aws-wpp"
+
+
+def _resolve_parameter_name(suffix: str, override_env_var: str) -> Optional[str]:
+    """Return the fully-qualified parameter name for the supplied suffix."""
+
+    override_name = _safe_strip(os.environ.get(override_env_var))
+    if override_name:
+        return override_name
+
+    env = _resolve_environment()
+    if not env:
+        logger.debug("Unable to resolve ENVIRONMENT for Bedrock agent fallback")
+        return None
+
+    namespace = _resolve_namespace()
+    if not namespace:
+        logger.debug("Unable to resolve namespace for Bedrock agent fallback")
+        return None
+
+    return f"/{env}/{namespace}/{suffix}"
+
+
 @lru_cache(maxsize=1)
 def _agent_parameters_from_ssm(region: str) -> Tuple[Optional[str], Optional[str]]:
     """Fetch the agent ID and alias ID pair from SSM if present."""
 
-    env = os.environ.get("ENVIRONMENT")
-    if not env:
+    agent_id_parameter = _resolve_parameter_name(
+        "bedrock-agent-id", "BEDROCK_AGENT_ID_PARAMETER_NAME"
+    )
+    alias_parameter = _resolve_parameter_name(
+        "bedrock-agent-alias-id-full-string",
+        "BEDROCK_AGENT_ALIAS_ID_PARAMETER_NAME",
+    )
+
+    if not agent_id_parameter and not alias_parameter:
         return None, None
 
-    base_path = f"/{env}/aws-wpp"
     agent_id: Optional[str] = None
     agent_alias_id: Optional[str] = None
 
     try:
-        resp = _ssm(region).get_parameter(
-            Name=f"{base_path}/bedrock-agent-id",
-            WithDecryption=False,
-        )
-        agent_id = resp["Parameter"]["Value"].strip() or None
+        if agent_id_parameter:
+            resp = _ssm(region).get_parameter(
+                Name=agent_id_parameter,
+                WithDecryption=False,
+            )
+            agent_id = _safe_strip(resp["Parameter"]["Value"])
     except ClientError as exc:  # pragma: no cover - defensive guard
         error_code = exc.response.get("Error", {}).get("Code")
         if error_code not in {"ParameterNotFound", "AccessDeniedException"}:
@@ -44,18 +112,21 @@ def _agent_parameters_from_ssm(region: str) -> Tuple[Optional[str], Optional[str
             )
 
     try:
-        resp = _ssm(region).get_parameter(
-            Name=f"{base_path}/bedrock-agent-alias-id-full-string",
-            WithDecryption=False,
-        )
-        alias_value = resp["Parameter"]["Value"].strip()
-        if "|" in alias_value:
-            maybe_agent, maybe_alias = alias_value.split("|", maxsplit=1)
-            if maybe_agent and not agent_id:
-                agent_id = maybe_agent
-            agent_alias_id = maybe_alias or None
-        else:
-            agent_alias_id = alias_value or None
+        if alias_parameter:
+            resp = _ssm(region).get_parameter(
+                Name=alias_parameter,
+                WithDecryption=False,
+            )
+            alias_value = _safe_strip(resp["Parameter"]["Value"])
+            if alias_value and "|" in alias_value:
+                maybe_agent, maybe_alias = alias_value.split("|", maxsplit=1)
+                maybe_agent = _safe_strip(maybe_agent)
+                maybe_alias = _safe_strip(maybe_alias)
+                if maybe_agent and not agent_id:
+                    agent_id = maybe_agent
+                agent_alias_id = maybe_alias
+            else:
+                agent_alias_id = alias_value
     except ClientError as exc:  # pragma: no cover - defensive guard
         error_code = exc.response.get("Error", {}).get("Code")
         if error_code not in {"ParameterNotFound", "AccessDeniedException"}:

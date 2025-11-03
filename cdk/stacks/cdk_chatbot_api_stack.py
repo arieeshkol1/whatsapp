@@ -1,6 +1,6 @@
 # Built-in imports
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 DEFAULT_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
 FALLBACK_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
@@ -214,12 +214,7 @@ class ChatbotAPIStack(Stack):
             code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
             timeout=Duration.seconds(60),
             memory_size=512,
-            environment={
-                "ENVIRONMENT": self.app_config["deployment_environment"],
-                "LOG_LEVEL": self.app_config["log_level"],
-                "SECRET_NAME": self.app_config["secret_name"],
-                "META_ENDPOINT": self.app_config["meta_endpoint"],
-            },
+            environment=self._build_state_machine_lambda_environment(),
             layers=[
                 self.lambda_layer_powertools,
                 self.lambda_layer_common,
@@ -287,6 +282,29 @@ class ChatbotAPIStack(Stack):
             },
             role=bedrock_agent_lambda_role,
         )
+
+    def _build_state_machine_lambda_environment(self) -> Dict[str, str]:
+        """Compose environment variables for the state machine processor Lambda."""
+
+        base_environment: Dict[str, str] = {
+            "ENVIRONMENT": self.app_config["deployment_environment"],
+            "LOG_LEVEL": self.app_config["log_level"],
+            "SECRET_NAME": self.app_config["secret_name"],
+            "META_ENDPOINT": self.app_config["meta_endpoint"],
+        }
+
+        optional_values: Dict[str, Optional[str]] = {
+            "AGENT_ID": self.app_config.get("bedrock_agent_id"),
+            "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
+            "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
+            "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
+        }
+
+        for key, value in optional_values.items():
+            if value:
+                base_environment[key] = value
+
+        return base_environment
 
     def create_dynamodb_streams(self) -> None:
         """
