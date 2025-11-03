@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Tuple
+from typing import Iterable, Optional, Tuple
 
 import boto3
 import requests
@@ -32,30 +32,46 @@ def _preview(text: str, limit: int = 160) -> str:
     return t if len(t) <= limit else (t[:limit] + f"... (+{len(t)-limit} chars)")
 
 
-def _load_secret_json() -> dict:
+def _parse_stage_list(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return []
+    stages = [stage.strip() for stage in raw.split(",") if stage.strip()]
+    return stages
+
+
+def _load_secret_json(*, stages: Iterable[str]) -> dict:
     secret_name = os.environ.get("SECRET_NAME")
     if not secret_name:
         raise RuntimeError(
             "SECRET_NAME env var is required (Secrets Manager name/ARN)."
         )
 
-    version_stage = os.environ.get("SECRET_VERSION_STAGE", "AWSCURRENT")
-    try:
-        resp = secrets.get_secret_value(
-            SecretId=secret_name, VersionStage=version_stage
-        )
-    except ClientError as exc:
-        logger.error(
-            "Failed to fetch secret",
-            extra={
-                "secret_name": secret_name,
-                "version_stage": version_stage,
-                "error_code": getattr(exc, "response", {}).get("Error", {}).get("Code"),
-            },
-        )
+    last_error: Optional[ClientError] = None
+    for version_stage in stages:
+        try:
+            resp = secrets.get_secret_value(
+                SecretId=secret_name, VersionStage=version_stage
+            )
+            break
+        except ClientError as exc:
+            last_error = exc
+            logger.error(
+                "Failed to fetch secret",
+                extra={
+                    "secret_name": secret_name,
+                    "version_stage": version_stage,
+                    "error_code": getattr(exc, "response", {})
+                    .get("Error", {})
+                    .get("Code"),
+                },
+            )
+    else:
+        if last_error is None:
+            raise RuntimeError("No Secret Manager stages provided")
         raise RuntimeError(
             "Unable to retrieve WhatsApp credentials from Secrets Manager"
-        ) from exc
+        ) from last_error
+
     if "SecretString" not in resp:
         raise RuntimeError("Secret is binary; expected a plaintext JSON SecretString.")
     try:
@@ -65,13 +81,28 @@ def _load_secret_json() -> dict:
     return data
 
 
-def _get_creds_from_secret() -> Tuple[str, str, str]:
+def _initial_secret_stages() -> list[str]:
+    configured = _parse_stage_list(os.environ.get("SECRET_VERSION_STAGE"))
+    return configured or ["AWSCURRENT"]
+
+
+def _retry_secret_stages() -> list[str]:
+    configured = _parse_stage_list(os.environ.get("SECRET_RETRY_VERSION_STAGES"))
+    if configured:
+        return configured
+    # Default retry order attempts a pending rotation first, then the current one.
+    return ["AWSPENDING", "AWSCURRENT"]
+
+
+def _get_creds_from_secret(
+    *, stages: Optional[Iterable[str]] = None
+) -> Tuple[str, str, str]:
     """
     Returns (token, phone_id, base_url) from AWSCURRENT version of the secret.
     No caching: always read fresh to avoid stale tokens.
     """
 
-    data = _load_secret_json()
+    data = _load_secret_json(stages=stages or _initial_secret_stages())
 
     token = data.get("META_TOKEN")
     phone_id = data.get("META_PHONE_NUMBER_ID")
@@ -201,15 +232,15 @@ class SendMessage(BaseStepFunction):
         }
 
         # Try 1: use current secret
-        token, phone_id, base_url = _get_creds_from_secret()
-        version_stage = os.environ.get("SECRET_VERSION_STAGE", "AWSCURRENT")
+        stages_used = _initial_secret_stages()
+        token, phone_id, base_url = _get_creds_from_secret(stages=stages_used)
         self.logger.info(
             "Using WA creds",
             extra={
                 "source": "secretsmanager",
                 "phone_id_tail": str(phone_id)[-4:],
                 "base_url": base_url,
-                "secret_version_stage": version_stage,
+                "secret_version_stage": stages_used,
             },
         )
 
@@ -229,7 +260,17 @@ class SendMessage(BaseStepFunction):
                 self.logger.info(
                     "Detected expired token (190/463). Re-reading secret and retrying once."
                 )
-                token, phone_id, base_url = _get_creds_from_secret()
+                retry_stages = _retry_secret_stages()
+                token, phone_id, base_url = _get_creds_from_secret(stages=retry_stages)
+                self.logger.info(
+                    "Retrying send with refreshed WA creds",
+                    extra={
+                        "source": "secretsmanager",
+                        "phone_id_tail": str(phone_id)[-4:],
+                        "base_url": base_url,
+                        "secret_version_stage": retry_stages,
+                    },
+                )
                 response = _post_whatsapp_message(
                     token=token, phone_id=phone_id, base_url=base_url, payload=payload
                 )
