@@ -1,5 +1,6 @@
 # Built-in imports
 from datetime import datetime
+import re
 
 # Own imports
 from state_machine.base_step_function import BaseStepFunction
@@ -11,6 +12,10 @@ from state_machine.processing.bedrock_agent import call_bedrock_agent
 
 logger = custom_logger()
 ALLOWED_MESSAGE_TYPES = WhatsAppMessageTypes.__members__
+
+HEBREW_PATTERN = re.compile(r"[א-ת]")
+HEBREW_INPUT_REQUIRED_MESSAGE = "אנא שלחו את בקשתכם בעברית כדי שאוכל לסייע."
+HEBREW_OUTPUT_FALLBACK_MESSAGE = "סליחה, לא הצלחתי לעבד את הבקשה. אנא נסחו אותה שוב בעברית."  # pragma: allowlist secret
 
 
 class ProcessText(BaseStepFunction):
@@ -34,14 +39,33 @@ class ProcessText(BaseStepFunction):
             .get("dynamodb", {})
             .get("NewImage", {})
             .get("text", {})
-            .get("S", "DEFAULT_RESPONSE")
-        )
+            .get("S", "")
+        ).strip()
 
-        # TODO: Update "acnowledged" message to a more complex response
-        # TODO: Add more complex "text processing" logic here with memory and sessions...
-        self.response_message = call_bedrock_agent(
-            self.text, session_id=self.correlation_id
-        )
+        if not self.text or not HEBREW_PATTERN.search(self.text):
+            self.logger.info(
+                "Incoming message is missing Hebrew characters; sending guidance",
+                extra={"sample": self.text[:30]},
+            )
+            self.response_message = HEBREW_INPUT_REQUIRED_MESSAGE
+        else:
+            augmented_prompt = (
+                f"הודעת לקוח: {self.text}\n\n"
+                "אנא הגב בעברית בלבד, בסגנון חם ומזמין של הסומלייה הדיגיטלית של האוויטוש."
+            )
+            self.response_message = call_bedrock_agent(
+                session_id=self.correlation_id,
+                input_text=augmented_prompt,
+            )
+
+            if not self.response_message or not HEBREW_PATTERN.search(
+                self.response_message
+            ):
+                self.logger.warning(
+                    "Agent response missing Hebrew characters; using fallback",
+                    extra={"response_preview": (self.response_message or "")[:50]},
+                )
+                self.response_message = HEBREW_OUTPUT_FALLBACK_MESSAGE
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
