@@ -1,4 +1,6 @@
 # Built-in imports
+from typing import Any, Dict, List
+
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -22,7 +24,9 @@ class DynamoDBHelper:
         self.dynamodb_resource = boto3.resource("dynamodb", endpoint_url=endpoint_url)
         self.table = self.dynamodb_resource.Table(self.table_name)
 
-    def get_item_by_pk_and_sk(self, partition_key: str, sort_key: str) -> dict:
+    def get_item_by_pk_and_sk(
+        self, partition_key: str, sort_key: str
+    ) -> Dict[str, Any]:
         """
         Method to get a single DynamoDB item from the primary key (pk+sk).
         :param partition_key (str): partition key value.
@@ -61,7 +65,7 @@ class DynamoDBHelper:
 
     def query_by_pk_and_sk_begins_with(
         self, partition_key: str, sort_key_portion: str
-    ) -> list[dict]:
+    ) -> List[Dict[str, Any]]:
         """
         Method to run a query against DynamoDB with partition key and the sort
         key with <begins-with> functionality on it.
@@ -73,7 +77,7 @@ class DynamoDBHelper:
             f"pk: ({partition_key}) and sk: ({sort_key_portion})"
         )
 
-        all_items = []
+        all_items: List[Dict[str, Any]] = []
         try:
             # The structure key for a single-table-design "PK" and "SK" naming
             key_condition = Key("PK").eq(partition_key) & Key("SK").begins_with(
@@ -110,7 +114,7 @@ class DynamoDBHelper:
             )
             raise error
 
-    def put_item(self, data: dict) -> dict:
+    def put_item(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Method to add a single DynamoDB item.
         :param data (dict): Item to be added in a JSON format (without the "S", "N", "B" approach).
