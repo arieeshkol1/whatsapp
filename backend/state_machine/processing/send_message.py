@@ -1,6 +1,5 @@
 import os
 import json
-import traceback
 from typing import Tuple
 
 import boto3
@@ -204,10 +203,6 @@ class SendMessage(BaseStepFunction):
             self.logger.error(
                 "Error in POST WhatsApp Message Meta API Response",
                 extra={"exception": err_str},
-            )
-            self.logger.debug(
-                "Meta API exception stack trace",
-                extra={"traceback": traceback.format_exc()},
             )
 
             # If expired token (190/463), refresh secret once and retry
