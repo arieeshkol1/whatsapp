@@ -50,9 +50,7 @@ def _load_secret_json() -> dict:
             extra={
                 "secret_name": secret_name,
                 "version_stage": version_stage,
-                "error_code": getattr(exc, "response", {})
-                .get("Error", {})
-                .get("Code"),
+                "error_code": getattr(exc, "response", {}).get("Error", {}).get("Code"),
             },
         )
         raise RuntimeError(
