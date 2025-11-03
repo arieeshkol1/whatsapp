@@ -1,16 +1,11 @@
-# Built-in imports
-from datetime import datetime
-
 # Own imports
 from state_machine.base_step_function import BaseStepFunction
-from common.enums import WhatsAppMessageTypes
 from common.logger import custom_logger
 
 from state_machine.processing.bedrock_agent import call_bedrock_agent
 
 
 logger = custom_logger()
-ALLOWED_MESSAGE_TYPES = WhatsAppMessageTypes.__members__
 
 
 class ProcessText(BaseStepFunction):
@@ -40,7 +35,8 @@ class ProcessText(BaseStepFunction):
         # TODO: Update "acnowledged" message to a more complex response
         # TODO: Add more complex "text processing" logic here with memory and sessions...
         self.response_message = call_bedrock_agent(
-            self.text, session_id=self.correlation_id
+            session_id=self.correlation_id,
+            input_text=self.text,
         )
 
         self.logger.info(f"Generated response message: {self.response_message}")
