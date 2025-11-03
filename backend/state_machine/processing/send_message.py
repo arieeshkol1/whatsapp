@@ -205,6 +205,10 @@ class SendMessage(BaseStepFunction):
                 "Error in POST WhatsApp Message Meta API Response",
                 extra={"exception": err_str},
             )
+            self.logger.debug(
+                "Meta API exception stack trace",
+                extra={"traceback": traceback.format_exc()},
+            )
 
             # If expired token (190/463), refresh secret once and retry
             if _should_retry_on_oauth(err_str):
