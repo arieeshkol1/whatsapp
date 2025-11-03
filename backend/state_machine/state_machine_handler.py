@@ -7,11 +7,25 @@ from common.logger import custom_logger
 logger = custom_logger()
 
 # Map known classes to their modules for reliable import.
-# Add here if you create more processor classes.
+# Add here if you create more processor classes that live outside the
+# conventional camelCase-to-snake_case lookup.
 CLASS_MODULE_MAP = {
     "SendMessage": "state_machine.processing.send_message",
     "ProcessText": "state_machine.processing.process_text",
+    "ProcessVoice": "state_machine.processing.process_voice",
+    "ValidateMessage": "state_machine.processing.validate_message",
+    "Success": "state_machine.utils.success",
+    "Failure": "state_machine.utils.failure",
 }
+
+
+def _camel_to_snake(name: str) -> str:
+    pieces = []
+    for index, char in enumerate(name):
+        if char.isupper() and index != 0:
+            pieces.append("_")
+        pieces.append(char.lower())
+    return "".join(pieces)
 
 
 def _extract_params_and_event(raw_event: dict):
@@ -45,14 +59,31 @@ def _resolve_target(class_name: str, method_name: str):
         raise ValueError("Missing params.method_name")
 
     module_name = CLASS_MODULE_MAP.get(class_name)
-    if not module_name:
-        guessed = (
-            f"state_machine.processing.{class_name[0].lower()}"
-            f"{''.join([c if c.islower() else '_' + c.lower() for c in class_name[1:]]).lstrip('_')}"
+    candidate_modules = []
+    if module_name:
+        candidate_modules.append(module_name)
+    else:
+        snake_name = _camel_to_snake(class_name)
+        candidate_modules.extend(
+            (
+                f"state_machine.processing.{snake_name}",
+                f"state_machine.utils.{snake_name}",
+            )
         )
-        module_name = guessed
 
-    module = importlib.import_module(module_name)
+    module = None
+    last_exception = None
+    for candidate in candidate_modules:
+        try:
+            module = importlib.import_module(candidate)
+            module_name = candidate
+            break
+        except ModuleNotFoundError as exc:  # pragma: no cover - handled by fallback
+            last_exception = exc
+    if module is None:
+        raise ModuleNotFoundError(
+            f"Could not resolve module for class '{class_name}'"
+        ) from last_exception
 
     clazz = getattr(module, class_name, None)
     if clazz is None:
