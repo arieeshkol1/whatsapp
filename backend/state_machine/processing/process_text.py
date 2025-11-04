@@ -1,6 +1,6 @@
 # Own imports
 import os
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
@@ -8,6 +8,11 @@ from common.helpers.dynamodb_helper import DynamoDBHelper
 from common.customer_profiles import (
     format_customer_summary,
     load_customer_profile,
+)
+from common.conversation_state import (
+    extract_state_updates_from_message,
+    format_order_progress_summary,
+    merge_conversation_state,
 )
 
 from state_machine.processing.bedrock_agent import call_bedrock_agent
@@ -98,16 +103,59 @@ class ProcessText(BaseStepFunction):
             format_customer_summary(customer_profile) if customer_profile else None
         )
 
+        partition_key = f"NUMBER#{from_number}" if from_number else None
+        conversation_state: Dict[str, Any] = {}
+        order_progress_summary: Optional[str] = None
+
+        if partition_key and _history_helper:
+            try:
+                stored_state = _history_helper.get_conversation_state(
+                    partition_key, conversation_id
+                )
+                if isinstance(stored_state, dict):
+                    conversation_state = stored_state
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to fetch conversation state")
+
+        inferred_updates = extract_state_updates_from_message(self.text)
+        provided_updates = (
+            self.event.get("conversation_state_updates")
+            if isinstance(self.event.get("conversation_state_updates"), dict)
+            else {}
+        )
+
+        combined_updates: Dict[str, Any] = {}
+        combined_updates.update(inferred_updates)
+        combined_updates.update(provided_updates)
+
+        if combined_updates:
+            conversation_state = merge_conversation_state(
+                conversation_state, combined_updates
+            )
+            if partition_key and _history_helper:
+                try:
+                    _history_helper.put_conversation_state(
+                        partition_key, conversation_id, conversation_state
+                    )
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.exception("Failed to persist conversation state")
+
+        order_progress_summary = format_order_progress_summary(conversation_state)
+
         self.logger.info(
             "Prepared conversation context",
             extra={
                 "conversation_id": conversation_id,
                 "history_message_count": len(history_lines),
                 "has_customer_profile": bool(customer_summary),
+                "has_conversation_state": bool(conversation_state),
             },
         )
 
         context_sections: List[str] = []
+
+        if order_progress_summary:
+            context_sections.append(order_progress_summary)
 
         if customer_summary:
             context_sections.append(customer_summary)
@@ -131,11 +179,17 @@ class ProcessText(BaseStepFunction):
         self.logger.info("Validation finished successfully")
 
         final_response = self.response_message
-        if customer_summary:
-            final_response = f"{self.response_message}\n\n{customer_summary}"
+        for section in [order_progress_summary, customer_summary]:
+            if section:
+                if section not in final_response:
+                    final_response = f"{final_response}\n\n{section}"
 
         self.event["response_message"] = final_response
         if customer_summary:
             self.event["customer_summary"] = customer_summary
+        if order_progress_summary:
+            self.event["order_progress_summary"] = order_progress_summary
+        if conversation_state:
+            self.event["conversation_state"] = conversation_state
 
         return self.event

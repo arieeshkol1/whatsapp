@@ -216,6 +216,63 @@ class DynamoDBHelper:
             )
             raise
 
+    def get_conversation_state(
+        self, partition_key: str, conversation_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Return structured state persisted for a conversation if present."""
+
+        sort_key = f"STATE#{conversation_id}"
+        try:
+            response = self.table.get_item(Key={"PK": partition_key, "SK": sort_key})
+        except ClientError as error:
+            logger.error(
+                "get_conversation_state operation failed",
+                extra={
+                    "table_name": self.table_name,
+                    "pk": partition_key,
+                    "sk": sort_key,
+                    "error": str(error),
+                },
+            )
+            raise
+
+        if not response:
+            return None
+
+        item = response.get("Item")
+        if not isinstance(item, dict):
+            return None
+
+        state = item.get("state")
+        return state if isinstance(state, dict) else None
+
+    def put_conversation_state(
+        self, partition_key: str, conversation_id: int, state: Dict[str, Any]
+    ) -> None:
+        """Persist structured state for a conversation."""
+
+        sort_key = f"STATE#{conversation_id}"
+        try:
+            self.table.put_item(
+                Item={
+                    "PK": partition_key,
+                    "SK": sort_key,
+                    "state": state,
+                    "last_updated_at": datetime.utcnow().isoformat(),
+                }
+            )
+        except ClientError as error:
+            logger.error(
+                "put_conversation_state operation failed",
+                extra={
+                    "table_name": self.table_name,
+                    "pk": partition_key,
+                    "sk": sort_key,
+                    "error": str(error),
+                },
+            )
+            raise
+
     def get_customer_profile(
         self, normalized_phone: str, sort_key: str
     ) -> Optional[Dict[str, Any]]:
