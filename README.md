@@ -67,9 +67,11 @@ Thanks for all the inspiration and guidance on the Generative AI journey:
             <p align="center">Curious Solutions Architect experienced in DevOps and passionate about advanced cloud-based solutions and deployments in AWS. I am convinced that today's greatest challenges must be solved by people that love what they do.</p>
         </td>
         <td>
+            <p align="center"><img src="assets/ArielEshkol_AWS.png" width=80%></p>
+        </td>
     </tr>
 </table>
 
 ## LICENSE
 
-Copyright 2025 Ariel Eshkol.
+Copyright 2024 Ariel Eshkol.

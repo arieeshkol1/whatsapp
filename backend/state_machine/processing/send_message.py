@@ -85,8 +85,8 @@ def _initial_secret_stages() -> list[str]:
     configured = _parse_stage_list(os.environ.get("SECRET_VERSION_STAGE"))
     if configured:
         return configured
-    # Default to the current production secret value.
-    return ["AWSCURRENT"]
+    # Default to trying a pending rotation first, then the current production value.
+    return ["AWSPENDING", "AWSCURRENT"]
 
 
 def _retry_secret_stages() -> list[str]:
