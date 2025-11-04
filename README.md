@@ -31,9 +31,7 @@ The processing of messages is powered by an AWS Step Function that has multiple 
 
 ## Results (WhatsApp Assistant Demo) 🔮
 
-<img src="assets/WhatsApp_Chatbot_Results_01.PNG" width=35%> <img src="assets/WhatsApp_Chatbot_Results_02.PNG" width=35%>
 
-<img src="assets/WhatsApp_Chatbot_Results_03.PNG" width=35%> <img src="assets/WhatsApp_Chatbot_Results_04.PNG" width=35%>
 
 ## Manual Steps (Only Once) :raised_hand:
 
