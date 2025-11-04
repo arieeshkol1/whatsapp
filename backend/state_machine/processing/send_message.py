@@ -39,7 +39,7 @@ def _parse_stage_list(raw: Optional[str]) -> list[str]:
     return stages
 
 
-def _load_secret_json(*, stages: Iterable[str]) -> dict:
+def _load_secret_json(*, stages: Iterable[str]) -> tuple[dict, str]:
     secret_name = os.environ.get("SECRET_NAME")
     if not secret_name:
         raise RuntimeError(
@@ -78,16 +78,15 @@ def _load_secret_json(*, stages: Iterable[str]) -> dict:
         data = json.loads(resp["SecretString"])
     except json.JSONDecodeError:
         raise RuntimeError("Expected JSON in SecretString, but parsing failed.")
-    return data
+    return data, version_stage
 
 
 def _initial_secret_stages() -> list[str]:
     configured = _parse_stage_list(os.environ.get("SECRET_VERSION_STAGE"))
     if configured:
         return configured
-    # Default to attempting a pending rotation first so freshly rotated
-    # credentials are picked up before the legacy token expires.
-    return ["AWSPENDING", "AWSCURRENT"]
+    # Default to the current production secret value.
+    return ["AWSCURRENT"]
 
 
 def _retry_secret_stages() -> list[str]:
@@ -100,13 +99,13 @@ def _retry_secret_stages() -> list[str]:
 
 def _get_creds_from_secret(
     *, stages: Optional[Iterable[str]] = None
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, str, str]:
     """
-    Returns (token, phone_id, base_url) from AWSCURRENT version of the secret.
-    No caching: always read fresh to avoid stale tokens.
+    Returns (token, phone_id, base_url, stage_used) from the requested secret
+    stages. No caching: always read fresh to avoid stale tokens.
     """
 
-    data = _load_secret_json(stages=stages or _initial_secret_stages())
+    data, stage_used = _load_secret_json(stages=stages or _initial_secret_stages())
 
     token = data.get("META_TOKEN")
     phone_id = data.get("META_PHONE_NUMBER_ID")
@@ -129,7 +128,7 @@ def _get_creds_from_secret(
         ).rstrip("/")
         base_url = f"{meta_endpoint}/{DEFAULT_GRAPH_VERSION}"
 
-    return token, phone_id, base_url
+    return token, phone_id, base_url, stage_used
 
 
 def _post_whatsapp_message(
@@ -237,14 +236,16 @@ class SendMessage(BaseStepFunction):
 
         # Try 1: use current secret
         stages_used = _initial_secret_stages()
-        token, phone_id, base_url = _get_creds_from_secret(stages=stages_used)
+        token, phone_id, base_url, stage_used = _get_creds_from_secret(
+            stages=stages_used
+        )
         self.logger.info(
             "Using WA creds",
             extra={
                 "source": "secretsmanager",
                 "phone_id_tail": str(phone_id)[-4:],
                 "base_url": base_url,
-                "secret_version_stage": stages_used,
+                "secret_version_stage": stage_used,
             },
         )
 
@@ -265,14 +266,19 @@ class SendMessage(BaseStepFunction):
                     "Detected expired token (190/463). Re-reading secret and retrying once."
                 )
                 retry_stages = _retry_secret_stages()
-                token, phone_id, base_url = _get_creds_from_secret(stages=retry_stages)
+                (
+                    token,
+                    phone_id,
+                    base_url,
+                    retry_stage_used,
+                ) = _get_creds_from_secret(stages=retry_stages)
                 self.logger.info(
                     "Retrying send with refreshed WA creds",
                     extra={
                         "source": "secretsmanager",
                         "phone_id_tail": str(phone_id)[-4:],
                         "base_url": base_url,
-                        "secret_version_stage": retry_stages,
+                        "secret_version_stage": retry_stage_used,
                     },
                 )
                 response = _post_whatsapp_message(
