@@ -1,8 +1,8 @@
 # Built-in imports
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 # Own imports
@@ -137,3 +137,80 @@ class DynamoDBHelper:
                 f"error: {error}."
             )
             raise error
+
+    def get_latest_item_by_pk(self, partition_key: str) -> Optional[Dict[str, Any]]:
+        """Return the most recent item for a partition key (by sort key)."""
+
+        logger.info(
+            "Starting get_latest_item_by_pk", extra={"partition_key": partition_key}
+        )
+
+        try:
+            response = self.table.query(
+                KeyConditionExpression=Key("PK").eq(partition_key),
+                ScanIndexForward=False,
+                Limit=1,
+            )
+        except ClientError as error:
+            logger.error(
+                "get_latest_item_by_pk operation failed",
+                extra={
+                    "table_name": self.table_name,
+                    "pk": partition_key,
+                    "error": str(error),
+                },
+            )
+            raise
+
+        items = response.get("Items") or []
+        return items[0] if items else None
+
+    def query_by_conversation(
+        self, partition_key: str, conversation_id: int, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Return messages for a given partition and conversation id."""
+
+        logger.info(
+            "Starting query_by_conversation",
+            extra={
+                "partition_key": partition_key,
+                "conversation_id": conversation_id,
+                "limit": limit,
+            },
+        )
+
+        all_items: List[Dict[str, Any]] = []
+        last_evaluated_key: Optional[Dict[str, Any]] = None
+
+        try:
+            while True:
+                query_kwargs: Dict[str, Any] = {
+                    "KeyConditionExpression": Key("PK").eq(partition_key),
+                    "ScanIndexForward": True,
+                    "FilterExpression": Attr("conversation_id").eq(conversation_id),
+                    "Limit": limit,
+                }
+                if last_evaluated_key:
+                    query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+
+                response = self.table.query(**query_kwargs)
+                items = response.get("Items", [])
+                if items:
+                    all_items.extend(items)
+
+                last_evaluated_key = response.get("LastEvaluatedKey")
+                if not last_evaluated_key or len(all_items) >= limit:
+                    break
+
+            return all_items[:limit]
+        except ClientError as error:
+            logger.error(
+                "query_by_conversation operation failed",
+                extra={
+                    "table_name": self.table_name,
+                    "pk": partition_key,
+                    "conversation_id": conversation_id,
+                    "error": str(error),
+                },
+            )
+            raise

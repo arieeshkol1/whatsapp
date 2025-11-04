@@ -34,6 +34,18 @@ class ValidateMessage(BaseStepFunction):
         text = new_image.get("text", {}).get("S")
         whatsapp_id = new_image.get("whatsapp_id", {}).get("S")
         correlation_id = new_image.get("correlation_id", {}).get("S")
+        conversation_id_value = new_image.get("conversation_id", {}).get("N")
+
+        if conversation_id_value is None:
+            self.logger.warning(
+                "Missing conversation_id in DynamoDB image; defaulting to 1"
+            )
+            conversation_id = 1
+        else:
+            try:
+                conversation_id = int(conversation_id_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("NewImage.conversation_id.N must be numeric") from exc
 
         # Required checks (tighten/relax to your needs)
         self._require(from_number, "NewImage.from_number.S is required")
@@ -55,6 +67,7 @@ class ValidateMessage(BaseStepFunction):
                 "has_text": bool(text),
                 "whatsapp_id": whatsapp_id,
                 "correlation_id": correlation_id or "<none>",
+                "conversation_id": conversation_id,
             },
         )
 
@@ -63,6 +76,7 @@ class ValidateMessage(BaseStepFunction):
         evt["message_type"] = msg_type
         evt["from_number"] = from_number
         evt["whatsapp_id"] = whatsapp_id
+        evt["conversation_id"] = conversation_id
         if text:
             evt["text"] = text
 
