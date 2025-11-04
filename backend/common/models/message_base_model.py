@@ -15,6 +15,8 @@ class MessageBaseModel(BaseModel):
         whatsapp_id: str: WhatsApp ID of the message.
         whatsapp_timestamp: str: WhatsApp timestamp of the message.
         correlation_id: Optional(str): Correlation ID for the message.
+        conversation_id: int: Numeric identifier for the conversation/topic this
+            message belongs to.
     """
 
     PK: str = Field(pattern=r"^NUMBER#\d{10,13}$")
@@ -25,6 +27,7 @@ class MessageBaseModel(BaseModel):
     whatsapp_id: str
     whatsapp_timestamp: str
     correlation_id: Optional[str] = None
+    conversation_id: int = Field(default=1, ge=1)
 
     @classmethod
     def from_dynamodb_item(cls, dynamodb_item: dict) -> "MessageBaseModel":
@@ -37,4 +40,7 @@ class MessageBaseModel(BaseModel):
             whatsapp_timestamp=dynamodb_item["whatsapp_timestamp"]["S"],
             type=dynamodb_item["type"]["S"],
             correlation_id=dynamodb_item.get("correlation_id", {}).get("S"),
+            conversation_id=int(
+                dynamodb_item.get("conversation_id", {}).get("N", "1") or 1
+            ),
         )
