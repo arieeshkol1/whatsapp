@@ -117,6 +117,30 @@ class ProcessText(BaseStepFunction):
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
 
+        customer_profile = load_customer_profile(from_number)
+        customer_summary: Optional[str] = (
+            format_customer_summary(customer_profile) if customer_profile else None
+        )
+
+        self.logger.info(
+            "Prepared conversation context",
+            extra={
+                "conversation_id": conversation_id,
+                "history_message_count": len(history_lines),
+                "has_customer_profile": bool(customer_summary),
+            },
+        )
+        from_number = self.event.get("from_number") or message_payload.get(
+            "from_number", {}
+        ).get("S")
+        conversation_id = self.event.get("conversation_id", 1)
+        current_whatsapp_id = self.event.get("whatsapp_id") or message_payload.get(
+            "whatsapp_id", {}
+        ).get("S", "")
+
+        history_items = _fetch_conversation_history(from_number, conversation_id)
+        history_lines = _format_history_messages(history_items, current_whatsapp_id)
+
         self.logger.info(
             "Prepared conversation context",
             extra={
@@ -133,6 +157,21 @@ class ProcessText(BaseStepFunction):
             )
         else:
             input_text = self.text
+
+        context_sections: List[str] = []
+
+        if customer_summary:
+            context_sections.append(customer_summary)
+
+        if history_lines:
+            history_block = "\n".join(history_lines)
+            context_sections.append(
+                f"היסטוריית השיחה עבור הנושא הנוכחי:\n{history_block}"
+            )
+
+        context_sections.append(f"הודעת הלקוח כעת:\n{self.text}")
+
+        input_text = "\n\n".join(context_sections)
 
         context_sections: List[str] = []
 

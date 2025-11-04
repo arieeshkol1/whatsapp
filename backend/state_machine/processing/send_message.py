@@ -315,6 +315,12 @@ class SendMessage(BaseStepFunction):
 
         # Extract inputs
         text_message = self.event.get("response_message", "DEFAULT_RESPONSE_MESSAGE")
+        customer_summary = self.event.get("customer_summary")
+
+        if customer_summary:
+            text_message = str(text_message)
+            if customer_summary not in text_message:
+                text_message = f"{text_message}\n\n{customer_summary}"
 
         phone_number_raw = (
             self.event.get("input", {})
