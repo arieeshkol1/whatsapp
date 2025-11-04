@@ -13,6 +13,6 @@ def custom_logger(
     return Logger(
         service="wpp-chatbot",
         log_uncaught_exceptions=True,
-        owner="Santiago Garcia Arango",
+        owner="Ariel Eshkol",
         correlation_id=correlation_id,
     )
