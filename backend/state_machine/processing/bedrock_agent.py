@@ -137,6 +137,20 @@ def _agent_parameters_from_ssm(region: str) -> Tuple[Optional[str], Optional[str
     return agent_id, agent_alias_id
 
 
+ALLOWED_SESSION_ID_CHARACTERS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
+
+
+def _sanitize_session_id(session_id: str) -> str:
+    """Ensure the supplied session identifier only uses Bedrock-supported characters."""
+
+    sanitized = "".join(
+        character if character in ALLOWED_SESSION_ID_CHARACTERS else "-"
+        for character in session_id
+    )
+    stripped = sanitized.strip("-")
+    return stripped or "default-session"
+
+
 def call_bedrock_agent(
     *ignored_args: object,
     region: Optional[str] = None,
@@ -179,11 +193,13 @@ def call_bedrock_agent(
 
     rt = _runtime(region)
 
+    sanitized_session_id = _sanitize_session_id(session_id)
+
     try:
         resp = rt.invoke_agent(
             agentId=agent_id,
             agentAliasId=agent_alias_id,
-            sessionId=session_id,
+            sessionId=sanitized_session_id,
             inputText=input_text,
             enableTrace=enable_trace,
         )
