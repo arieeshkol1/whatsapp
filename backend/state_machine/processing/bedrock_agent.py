@@ -1,5 +1,6 @@
 # state_machine/processing/bedrock_agent.py
 import os
+import re
 from functools import lru_cache
 from typing import List, Optional, Tuple
 
@@ -137,16 +138,14 @@ def _agent_parameters_from_ssm(region: str) -> Tuple[Optional[str], Optional[str
     return agent_id, agent_alias_id
 
 
-ALLOWED_SESSION_ID_CHARACTERS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
+SESSION_ID_SANITIZER = re.compile(r"[^0-9A-Za-z._:-]+")
 
 
 def _sanitize_session_id(session_id: str) -> str:
     """Ensure the supplied session identifier only uses Bedrock-supported characters."""
 
-    sanitized = "".join(
-        character if character in ALLOWED_SESSION_ID_CHARACTERS else "-"
-        for character in session_id
-    )
+    sanitized = SESSION_ID_SANITIZER.sub("-", session_id)
+    sanitized = sanitized.replace("|", "-")
     stripped = sanitized.strip("-")
     return stripped or "default-session"
 
