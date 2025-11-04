@@ -83,7 +83,11 @@ def _load_secret_json(*, stages: Iterable[str]) -> dict:
 
 def _initial_secret_stages() -> list[str]:
     configured = _parse_stage_list(os.environ.get("SECRET_VERSION_STAGE"))
-    return configured or ["AWSCURRENT"]
+    if configured:
+        return configured
+    # Default to attempting a pending rotation first so freshly rotated
+    # credentials are picked up before the legacy token expires.
+    return ["AWSPENDING", "AWSCURRENT"]
 
 
 def _retry_secret_stages() -> list[str]:
