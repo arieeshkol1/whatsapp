@@ -31,6 +31,27 @@ _history_helper = (
 )
 
 
+MAX_SESSION_ID_LENGTH = 256
+
+
+def _build_session_id(
+    from_number: Optional[str], conversation_id: Optional[int], fallback: str
+) -> str:
+    """Construct a stable session identifier for the Bedrock agent."""
+
+    components: List[str] = []
+    if from_number:
+        components.append(str(from_number).strip())
+    if conversation_id and conversation_id > 0:
+        components.append(str(conversation_id))
+
+    session_identifier = "|".join(filter(None, components))
+    if not session_identifier:
+        session_identifier = fallback
+
+    return session_identifier[:MAX_SESSION_ID_LENGTH]
+
+
 def _fetch_conversation_history(from_number: str, conversation_id: int) -> List[dict]:
     if not _history_helper or not from_number or conversation_id < 1:
         return []
@@ -170,8 +191,14 @@ class ProcessText(BaseStepFunction):
 
         input_text = "\n\n".join(context_sections)
 
+        session_identifier = _build_session_id(
+            from_number=from_number,
+            conversation_id=conversation_id,
+            fallback=self.correlation_id,
+        )
+
         self.response_message = call_bedrock_agent(
-            session_id=self.correlation_id,
+            session_id=session_identifier,
             input_text=input_text,
         )
 
