@@ -45,7 +45,7 @@ def _build_session_id(
     if conversation_id and conversation_id > 0:
         components.append(str(conversation_id))
 
-    session_identifier = "|".join(filter(None, components))
+    session_identifier = "-".join(filter(None, components))
     if not session_identifier:
         session_identifier = fallback
 
