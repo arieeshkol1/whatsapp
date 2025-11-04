@@ -106,6 +106,33 @@ class ProcessText(BaseStepFunction):
                 "has_customer_profile": bool(customer_summary),
             },
         )
+        from_number = self.event.get("from_number") or message_payload.get(
+            "from_number", {}
+        ).get("S")
+        conversation_id = self.event.get("conversation_id", 1)
+        current_whatsapp_id = self.event.get("whatsapp_id") or message_payload.get(
+            "whatsapp_id", {}
+        ).get("S", "")
+
+        history_items = _fetch_conversation_history(from_number, conversation_id)
+        history_lines = _format_history_messages(history_items, current_whatsapp_id)
+
+        self.logger.info(
+            "Prepared conversation context",
+            extra={
+                "conversation_id": conversation_id,
+                "history_message_count": len(history_lines),
+            },
+        )
+
+        if history_lines:
+            history_block = "\n".join(history_lines)
+            input_text = (
+                "היסטוריית השיחה עבור הנושא הנוכחי:\n"
+                f"{history_block}\n\nהודעת הלקוח כעת:\n{self.text}"
+            )
+        else:
+            input_text = self.text
 
         context_sections: List[str] = []
 
