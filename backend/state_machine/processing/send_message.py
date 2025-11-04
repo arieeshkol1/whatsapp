@@ -10,6 +10,19 @@ from requests.adapters import HTTPAdapter, Retry
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
 
+
+class SendAttemptError(Exception):
+    """Wraps send failures with metadata about the attempted secret stage."""
+
+    def __init__(
+        self, stage_used: Optional[str], base_url: Optional[str], original: Exception
+    ):
+        self.stage_used = stage_used
+        self.base_url = base_url
+        self.original = original
+        super().__init__(str(original))
+
+
 logger = custom_logger()
 
 # Defaults
@@ -305,9 +318,13 @@ class SendMessage(BaseStepFunction):
                 "secret_version_stage": stage_used,
             },
         )
-        response = _post_whatsapp_message(
-            token=token, phone_id=phone_id, base_url=base_url, payload=payload
-        )
+        try:
+            response = _post_whatsapp_message(
+                token=token, phone_id=phone_id, base_url=base_url, payload=payload
+            )
+        except Exception as exc:  # pragma: no cover - re-raised with metadata
+            raise SendAttemptError(stage_used, base_url, exc) from exc
+
         return response, phone_id, base_url, stage_used
 
     def send_message(self):
@@ -375,6 +392,8 @@ class SendMessage(BaseStepFunction):
             )
         except Exception as e:
             err_str = str(e)
+            stage_used_1 = getattr(e, "stage_used", None)
+            base_url_1 = getattr(e, "base_url", None)
             self.logger.error(
                 "Error in POST WhatsApp Message Meta API Response",
                 extra={"exception": err_str, "first_stage_order": first_stage_order},
