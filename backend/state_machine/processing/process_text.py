@@ -46,6 +46,9 @@ def _build_session_id(
         components.append(str(conversation_id))
 
     session_identifier = "-".join(filter(None, components))
+
+    if "|" in session_identifier:
+        session_identifier = session_identifier.replace("|", "-")
     if not session_identifier:
         session_identifier = fallback
 
@@ -175,11 +178,11 @@ class ProcessText(BaseStepFunction):
 
         context_sections: List[str] = []
 
-        if order_progress_summary:
-            context_sections.append(order_progress_summary)
-
         if customer_summary:
             context_sections.append(customer_summary)
+
+        if order_progress_summary:
+            context_sections.append(order_progress_summary)
 
         if history_lines:
             history_block = "\n".join(history_lines)
@@ -206,7 +209,7 @@ class ProcessText(BaseStepFunction):
         self.logger.info("Validation finished successfully")
 
         final_response = self.response_message
-        for section in [order_progress_summary, customer_summary]:
+        for section in [customer_summary, order_progress_summary]:
             if section:
                 if section not in final_response:
                     final_response = f"{final_response}\n\n{section}"

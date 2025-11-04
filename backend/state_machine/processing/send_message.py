@@ -414,7 +414,7 @@ class SendMessage(BaseStepFunction):
         customer_summary = self.event.get("customer_summary")
         order_progress_summary = self.event.get("order_progress_summary")
         text_message = str(text_message)
-        for supplemental in (order_progress_summary, customer_summary):
+        for supplemental in (customer_summary, order_progress_summary):
             if supplemental and supplemental not in text_message:
                 text_message = f"{text_message}\n\n{supplemental}"
 
