@@ -1,5 +1,6 @@
 # Built-in imports
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, Iterable, List, Optional
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
@@ -210,6 +211,75 @@ class DynamoDBHelper:
                     "table_name": self.table_name,
                     "pk": partition_key,
                     "conversation_id": conversation_id,
+                    "error": str(error),
+                },
+            )
+            raise
+
+    def get_customer_profile(
+        self, normalized_phone: str, sort_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the stored customer profile for the supplied phone number."""
+
+        partition_key = f"CUSTOMER#{normalized_phone}"
+        try:
+            response = self.table.get_item(Key={"PK": partition_key, "SK": sort_key})
+        except ClientError as error:
+            logger.error(
+                "get_customer_profile operation failed",
+                extra={
+                    "table_name": self.table_name,
+                    "pk": partition_key,
+                    "sk": sort_key,
+                    "error": str(error),
+                },
+            )
+            raise
+
+        return response.get("Item") if response else None
+
+    def put_customer_profile(
+        self, normalized_phone: str, profile: Dict[str, Any], sort_key: str
+    ) -> None:
+        """Persist customer profile data and related orders to DynamoDB."""
+
+        partition_key = f"CUSTOMER#{normalized_phone}"
+        orders: Iterable[Dict[str, Any]] = profile.get("הזמנות") or profile.get(
+            "orders", []
+        )
+
+        try:
+            with self.table.batch_writer() as batch:
+                batch.put_item(
+                    Item={
+                        "PK": partition_key,
+                        "SK": sort_key,
+                        "profile": profile,
+                        "last_updated_at": datetime.utcnow().isoformat(),
+                    }
+                )
+
+                for index, order in enumerate(orders):
+                    if not isinstance(order, dict):
+                        continue
+                    order_id = (
+                        order.get("מספר_הזמנה")
+                        or order.get("order_id")
+                        or f"AUTO#{index + 1}"
+                    )
+                    batch.put_item(
+                        Item={
+                            "PK": partition_key,
+                            "SK": f"ORDER#{order_id}",
+                            "order": order,
+                        }
+                    )
+        except ClientError as error:
+            logger.error(
+                "put_customer_profile operation failed",
+                extra={
+                    "table_name": self.table_name,
+                    "pk": partition_key,
                     "error": str(error),
                 },
             )
