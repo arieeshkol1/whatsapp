@@ -20,6 +20,7 @@ def chat_message_base_model(correlation_id) -> MessageBaseModel:
         whatsapp_id="wamid.DBgMATczCjA2ODI5MTg5FQICBhgUM0FCOUMzNxUxNkT2RUM2OTU5QTIA",
         whatsapp_timestamp="1718768502",
         correlation_id=correlation_id,
+        conversation_id=1,
     )
 
 
@@ -61,6 +62,7 @@ def test_chat_message_text_model(
         "whatsapp_id": "wamid.DBgMATczCjA2ODI5MTg5FQICBhgUM0FCOUMzNxUxNkT2RUM2OTU5QTIA",
         "whatsapp_timestamp": "1718768502",
         "correlation_id": correlation_id,
+        "conversation_id": 1,
         "text": "Hello by Santi!",
     }
 
@@ -78,6 +80,7 @@ def test_chat_message_text_model_from_dynamodb_item():
         },
         "whatsapp_timestamp": {"S": "1718768502"},
         "correlation_id": {"S": str(uuid4())},
+        "conversation_id": {"N": "2"},
     }
 
     chat_message_instance = TextMessageModel.from_dynamodb_item(dynamodb_item)
@@ -88,3 +91,4 @@ def test_chat_message_text_model_from_dynamodb_item():
 
     # Check additional attributes from text message model
     assert chat_message_instance.text == "Hello by Santi!"
+    assert chat_message_instance.conversation_id == 2

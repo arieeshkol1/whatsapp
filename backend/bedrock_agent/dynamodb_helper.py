@@ -1,5 +1,7 @@
 # Built-in imports
 import os
+from typing import Any, Dict, List
+
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -12,7 +14,9 @@ dynamodb_resource = boto3.resource("dynamodb")
 table = dynamodb_resource.Table(TABLE_NAME)
 
 
-def query_dynamodb_pk_sk(partition_key: str, sort_key_portion: str) -> list[dict]:
+def query_dynamodb_pk_sk(
+    partition_key: str, sort_key_portion: str
+) -> List[Dict[str, Any]]:
     """
     Function to run a query against DynamoDB with partition key and the sort
     key with <begins-with> functionality on it.
@@ -24,7 +28,7 @@ def query_dynamodb_pk_sk(partition_key: str, sort_key_portion: str) -> list[dict
         f"pk: ({partition_key}) and sk: ({sort_key_portion})"
     )
 
-    all_items = []
+    all_items: List[Dict[str, Any]] = []
     try:
         # The structure key for a single-table-design "PK" and "SK" naming
         key_condition = Key("PK").eq(partition_key) & Key("SK").begins_with(
