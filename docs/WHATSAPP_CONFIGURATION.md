@@ -22,7 +22,7 @@ In order to correctly configure the Meta Developer settings and projects (only o
 4. Create a "Business portfolio in Business Manager"
 
    - Business Name == "ADD_NAME" (eg "SANTI")
-   - Person's Name == "ADD_NAME" (eg "Santiago Garcia Arango")
+   - Person's Name == "ADD_NAME" (eg "Ariel Eshkol")
    - Business Email == "ADD_EMAIL" (eg "san99tiago+meta@gmail.com")
 
 5. Configure the "WhatsApp Business API"
