@@ -121,6 +121,8 @@ def action_group_create_bundles(parameters):
 
 
 def lambda_handler(event, context):
+    import json
+
     action_group = event["actionGroup"]
     _function = event["function"]
     parameters = event.get("parameters", [])
@@ -129,12 +131,34 @@ def lambda_handler(event, context):
     print("ACTION GROUP IS: ", action_group)
 
     # --- Load Bedrock config JSON from DynamoDB ---
-    CONFIG_PK = "CONFIG#DEFAULT"
-    CONFIG_SK = "CONFIG#DEFAULT"
-    config_items = query_dynamodb_pk_sk(
-        partition_key=CONFIG_PK,
-        sort_key_portion=CONFIG_SK
-    )
+   from datetime import datetime, timedelta, timezone
+
+# Extract user phone number from event
+user_number = event.get("from_number")
+pk = f"NUMBER#{user_number}"
+
+# Get current and past hour ISO timestamps
+now = datetime.now(timezone.utc)
+one_hour_ago = now - timedelta(hours=1)
+
+# Query all messages or records from that number
+user_items = query_dynamodb_pk_sk(partition_key=pk, sort_key_portion="MESSAGE#")
+
+# Filter records created within the past hour
+recent_records = [
+    item for item in user_items
+    if "created_at" in item
+    and datetime.fromisoformat(item["created_at"]) >= one_hour_ago
+]
+
+# Use latest item (if any) as config
+bedrock_config = recent_records[-1] if recent_records else {}
+print("Loaded dynamic Bedrock config:", bedrock_config)
+  
+
+
+
+
     bedrock_config = config_items[0] if config_items else {}
     print("Loaded Bedrock config:", bedrock_config)
 
@@ -148,11 +172,15 @@ def lambda_handler(event, context):
     else:
         raise ValueError(f"Action Group <{action_group}> not supported.")
 
-    # --- Build the response body ---
-    results_string = "\n-".join(results)
+    # --- Build prompt to send to Bedrock ---
+    config_as_text = json.dumps(bedrock_config, indent=2, ensure_ascii=False)
+    user_message = "\n-".join(results)
+    full_prompt = f"Settings:\n{config_as_text}\n\nAnswer the following:\n{user_message}"
+
+    # --- Build response body ---
     response_body = {
-        "TEXT": {"body": results_string},
-        "bedrock_config": bedrock_config  # Include config for downstream usage
+        "TEXT": {"body": full_prompt},
+        "bedrock_config": bedrock_config  # included for downstream processing
     }
 
     action_response = {
