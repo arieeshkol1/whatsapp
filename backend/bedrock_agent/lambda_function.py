@@ -128,7 +128,17 @@ def lambda_handler(event, context):
     print("PARAMETERS ARE: ", parameters)
     print("ACTION GROUP IS: ", action_group)
 
-    # TODO: enhance this If-Statement approach to a dynamic one...
+    # --- Load Bedrock config JSON from DynamoDB ---
+    CONFIG_PK = "CONFIG#DEFAULT"
+    CONFIG_SK = "CONFIG#DEFAULT"
+    config_items = query_dynamodb_pk_sk(
+        partition_key=CONFIG_PK,
+        sort_key_portion=CONFIG_SK
+    )
+    bedrock_config = config_items[0] if config_items else {}
+    print("Loaded Bedrock config:", bedrock_config)
+
+    # --- Run the action group logic ---
     if action_group == "LookupCatalog":
         results = action_group_lookup_catalog(parameters)
     elif action_group == "SuggestPairings":
@@ -138,9 +148,12 @@ def lambda_handler(event, context):
     else:
         raise ValueError(f"Action Group <{action_group}> not supported.")
 
-    # Convert the list of events to a string to be able to return it in the response as a string
+    # --- Build the response body ---
     results_string = "\n-".join(results)
-    response_body = {"TEXT": {"body": results_string}}
+    response_body = {
+        "TEXT": {"body": results_string},
+        "bedrock_config": bedrock_config  # Include config for downstream usage
+    }
 
     action_response = {
         "actionGroup": action_group,
@@ -152,6 +165,6 @@ def lambda_handler(event, context):
         "response": action_response,
         "messageVersion": event["messageVersion"],
     }
-    print("Response: {}".format(function_response))
 
+    print("Response: {}".format(function_response))
     return function_response
