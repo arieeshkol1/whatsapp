@@ -7,12 +7,12 @@ from common.logger import custom_logger
 logger = custom_logger()
 
 CLASS_MODULE_MAP = {
-    "ValidateMessage": "state_machine.utils.validate_message",
-    "ProcessText": "state_machine.processing.process_text",
-    "ProcessVoice": "state_machine.processing.process_voice",
-    "SendMessage": "state_machine.processing.send_message",
-    "Success": "state_machine.utils.success",
-    "Failure": "state_machine.utils.failure",
+    "ValidateMessage": "backend.state_machine.utils.validate_message",
+    "ProcessText": "backend.state_machine.processing.process_text",
+    "ProcessVoice": "backend.state_machine.processing.process_voice",
+    "SendMessage": "backend.state_machine.processing.send_message",
+    "Success": "backend.state_machine.utils.success",
+    "Failure": "backend.state_machine.utils.failure",
 }
 
 
@@ -53,9 +53,10 @@ def _candidate_modules_for_class(class_name: str) -> list[str]:
     for module_name in base_modules:
         if module_name not in candidates:
             candidates.append(module_name)
-        backend_prefixed = f"backend.{module_name}"
-        if backend_prefixed not in candidates:
-            candidates.append(backend_prefixed)
+        if not module_name.startswith("backend."):
+            backend_prefixed = f"backend.{module_name}"
+            if backend_prefixed not in candidates:
+                candidates.append(backend_prefixed)
     return candidates
 
 

@@ -3,11 +3,6 @@ import re
 import json
 from typing import Optional, Tuple, List, Dict, Any
 
-import boto3
-import requests
-from botocore.exceptions import ClientError
-from requests.adapters import HTTPAdapter, Retry
-
 from ..base_step_function import BaseStepFunction
 from ..integrations.meta.api_requests import MetaAPI
 from common.logger import custom_logger
