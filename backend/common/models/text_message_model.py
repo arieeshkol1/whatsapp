@@ -16,6 +16,8 @@ class TextMessageModel(MessageBaseModel):
         whatsapp_timestamp: str: WhatsApp timestamp of the message.
         text: str: Text of the message.
         correlation_id: Optional(str): Correlation ID for the message.
+        conversation_id: int: Numeric identifier for the conversation/topic this
+            message belongs to.
     """
 
     text: str
@@ -32,4 +34,7 @@ class TextMessageModel(MessageBaseModel):
             type=dynamodb_item["type"]["S"],
             text=dynamodb_item["text"]["S"],
             correlation_id=dynamodb_item.get("correlation_id", {}).get("S"),
+            conversation_id=int(
+                dynamodb_item.get("conversation_id", {}).get("N", "1") or 1
+            ),
         )
