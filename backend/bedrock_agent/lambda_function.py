@@ -1,64 +1,125 @@
 # NOTE: This is a super-MVP code for testing. Still has a lot of gaps to solve/fix. Do not use in prod.
 # TODO: Refactor solution to a standalone router for all Action Groups
 
+import json
+
+from typing import Any, Dict, List, Optional
+
 from bedrock_agent.dynamodb_helper import query_dynamodb_pk_sk
 
 
-def action_group_fetch_calendar_events(parameters):
-    # Extract date from parameters
-    date = None
+CATALOG_PK = "CATALOG#HAVITUSH"
+PAIRINGS_PK = "PAIRINGS#HAVITUSH"
+BUNDLES_PK = "BUNDLES#HAVITUSH"
+
+
+def _sanitize_sort_key_portion(raw_value: Optional[str]) -> str:
+    if not raw_value:
+        return ""
+    cleaned = raw_value.strip().upper()
+    return cleaned.replace(" ", "#")
+
+
+def _stringify_items(
+    items: List[Dict[str, Any]], detail_key: str, fallback_message: str
+) -> List[str]:
+    results: List[str] = []
+    for item in items:
+        details = item.get(detail_key)
+        if isinstance(details, dict):
+            name = details.get("name") or details.get("title")
+            description = details.get("description")
+            price = details.get("price")
+            fragments = [
+                fragment for fragment in [name, description, price] if fragment
+            ]
+            if fragments:
+                results.append(" - ".join(fragments))
+                continue
+        if isinstance(details, list):
+            for entry in details:
+                if isinstance(entry, str):
+                    results.append(entry)
+        elif isinstance(details, str):
+            results.append(details)
+    if not results:
+        results.append(fallback_message)
+    return results
+
+
+def action_group_lookup_catalog(parameters):
+    query_value = None
     for param in parameters:
-        if param["name"] == "date":
-            date = param["value"]
+        if param["name"] == "query":
+            query_value = param["value"]
+            break
 
-    all_events_for_user = query_dynamodb_pk_sk(
-        partition_key="USER#san99tiago@gmail.com",  # TODO: Extract user from input when multi-user support
-        sort_key_portion=f"DATE#{date}",
+    items = query_dynamodb_pk_sk(
+        partition_key=CATALOG_PK,
+        sort_key_portion=_sanitize_sort_key_portion(query_value),
     )
-    print("DEBUG, ", all_events_for_user)
+    print("CATALOG ITEMS: ", items)
 
-    # TODO: Add a more robust search engine/algorithm for matching/finding events
-    result_events = []
-    for calendar_event in all_events_for_user:
-        if calendar_event.get("events"):
-            result_events.extend(calendar_event["events"])
-
-    print(f"Events found: {result_events}")
-    return result_events
-
-
-def action_group_fetch_todos():
-    all_todos_for_user = query_dynamodb_pk_sk(
-        partition_key="USER#san99tiago@gmail.com",  # TODO: Extract user from input when multi-user support
-        sort_key_portion="TODO#",
+    return _stringify_items(
+        items,
+        detail_key="catalog_details",
+        fallback_message=(
+            "No catalog entries were found for that description. "
+            "Share more details and I'll keep looking!"
+        ),
     )
-    print("DEBUG, ", all_todos_for_user)
-
-    # TODO: Add a more robust search engine/algorithm for matching/finding events
-    result_todos = []
-    for todo in all_todos_for_user:
-        if todo.get("todo_details"):
-            result_todos.append(todo["todo_details"])
-
-    print(f"TODOs found: {result_todos}")
-    return result_todos
 
 
-def action_group_fetch_contacts():
-    all_contacts_for_user = query_dynamodb_pk_sk(
-        partition_key="USER#san99tiago@gmail.com",  # TODO: Extract user from input when multi-user support
-        sort_key_portion="CONTACT#",
+def action_group_suggest_pairings(parameters):
+    drink_name = None
+    for param in parameters:
+        if param["name"] == "drink_name":
+            drink_name = param["value"]
+            break
+
+    items = query_dynamodb_pk_sk(
+        partition_key=PAIRINGS_PK,
+        sort_key_portion=_sanitize_sort_key_portion(drink_name),
     )
-    print("DEBUG, ", all_contacts_for_user)
+    print("PAIRINGS ITEMS: ", items)
 
-    # TODO: Add a more robust search engine/algorithm for matching/finding events
-    result_contacts = []
-    for contact in all_contacts_for_user:
-        if contact.get("contact_details"):
-            result_contacts.append(contact["contact_details"])
+    return _stringify_items(
+        items,
+        detail_key="pairing_suggestions",
+        fallback_message=(
+            "I don't have curated pairings yet for that drink. "
+            "Let me know the flavor profile and I'll craft ideas for you!"
+        ),
+    )
 
-    print(f"Contacts found: {result_contacts}")
-    return result_contacts
+
+def action_group_create_bundles(parameters):
+    theme = None
+    budget = None
+    for param in parameters:
+        if param["name"] == "theme":
+            theme = param["value"]
+        if param["name"] == "budget":
+            budget = param["value"]
+
+    sort_key = _sanitize_sort_key_portion(theme)
+    if budget:
+        sort_key = f"{sort_key}#{_sanitize_sort_key_portion(budget)}"
+
+    items = query_dynamodb_pk_sk(
+        partition_key=BUNDLES_PK,
+        sort_key_portion=sort_key,
+    )
+    print("BUNDLE ITEMS: ", items)
+
+    return _stringify_items(
+        items,
+        detail_key="bundle_recommendations",
+        fallback_message=(
+            "I couldn't find a ready-made bundle for that occasion. "
+            "Would you like me to craft one manually?"
+        ),
+    )
 
 
 def lambda_handler(event, context):
@@ -70,18 +131,32 @@ def lambda_handler(event, context):
     print("ACTION GROUP IS: ", action_group)
 
     # TODO: enhance this If-Statement approach to a dynamic one...
-    if action_group == "FetchCalendarEvents":
-        results = action_group_fetch_calendar_events(parameters)
-    elif action_group == "FetchTODOs":
-        results = action_group_fetch_todos()
-    elif action_group == "FetchContacts":
-        results = action_group_fetch_contacts()
+    if action_group == "LookupCatalog":
+        results = action_group_lookup_catalog(parameters)
+    elif action_group == "SuggestPairings":
+        results = action_group_suggest_pairings(parameters)
+    elif action_group == "CreateBundles":
+        results = action_group_create_bundles(parameters)
     else:
         raise ValueError(f"Action Group <{action_group}> not supported.")
 
-    # Convert the list of events to a string to be able to return it in the response as a string
-    results_string = "\n-".join(results)
-    response_body = {"TEXT": {"body": results_string}}
+    bedrock_config = {
+        "action_group": action_group,
+        "function": _function,
+        "parameters": parameters,
+        "results": results,
+    }
+
+    config_as_text = json.dumps(bedrock_config, indent=2, ensure_ascii=False)
+    user_message = "\n-".join(results)
+    full_prompt = (
+        f"Settings:\n{config_as_text}\n\nAnswer the following:\n{user_message}"
+    )
+
+    response_body = {
+        "TEXT": {"body": full_prompt},
+        "bedrock_config": bedrock_config,
+    }
 
     action_response = {
         "actionGroup": action_group,
