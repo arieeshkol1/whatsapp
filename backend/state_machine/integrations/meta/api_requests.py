@@ -18,31 +18,52 @@ from state_machine.integrations.meta.api_utils import (
 from state_machine.integrations.meta.schemas import MetaPostMessageModel
 
 
-SECRET_NAME = os.environ["SECRET_NAME"]
-secrets_helper = SecretsHelper(SECRET_NAME)
-auth_token = secrets_helper.get_secret_value("META_TOKEN")
-
-
 class MetaAPI:
     """
     Class that contains the base helpers for interacting with the Meta API.
     """
 
-    def __init__(self, logger: Optional[Logger] = None) -> None:
+    def __init__(
+        self,
+        logger: Optional[Logger] = None,
+        secret_name: Optional[str] = None,
+        secrets_helper: Optional[SecretsHelper] = None,
+    ) -> None:
         self.logger = logger or custom_logger()
+        self.secret_name = secret_name or os.environ.get("SECRET_NAME")
+        self.secrets_helper = secrets_helper
+        self.api_headers: dict = {}
+        self.api_endpoint: str = ""
+        self.meta_secret_json: dict = {}
+
+        if self.secrets_helper is None and self.secret_name:
+            self.secrets_helper = SecretsHelper(self.secret_name)
+
         self.load_meta_configurations()
 
     def load_meta_configurations(self) -> None:
         """
         Method to load Meta configurations from Secrets Manager and initialize endpoint and headers.
         """
+        if not self.secrets_helper:
+            raise RuntimeError(
+                "MetaAPI secret configuration is missing; provide SECRET_NAME or a SecretsHelper instance"
+            )
+
         self.logger.debug("Loading Meta configurations from Secrets Manager...")
-        self.meta_secret_json = secrets_helper.get_secret_value()
+        self.meta_secret_json = self.secrets_helper.get_secret_value()
         _meta_token = self.meta_secret_json.get("META_TOKEN")
         _meta_from_phone_number_id = self.meta_secret_json.get(
             "META_FROM_PHONE_NUMBER_ID"
         )
-        self.api_headers = get_api_headers(bearer_token=auth_token)
+        if not _meta_token:
+            raise RuntimeError("META_TOKEN is missing from the WhatsApp secret")
+        if not _meta_from_phone_number_id:
+            raise RuntimeError(
+                "META_FROM_PHONE_NUMBER_ID is missing from the WhatsApp secret"
+            )
+
+        self.api_headers = get_api_headers(bearer_token=_meta_token)
         self.api_endpoint = get_api_endpoint(f"{_meta_from_phone_number_id}/messages")
 
     def post_message(
