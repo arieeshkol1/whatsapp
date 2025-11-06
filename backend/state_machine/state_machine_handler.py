@@ -3,7 +3,7 @@ from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 # Own imports
-from state_machine.__init__ import *  # noqa NOSONAR
+from .__init__ import *  # noqa NOSONAR
 
 
 logger = Logger(
