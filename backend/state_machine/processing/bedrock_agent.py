@@ -1,26 +1,64 @@
-# Built-in imports
+# backend/state_machine/processing/bedrock_agent.py
+
 import os
+import re
 from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError, EventStreamError
 
-# Own imports
 from common.logger import custom_logger
-
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT")
 
 logger = custom_logger()
 
-# Create a bedrock runtime client
+# Create clients at import (safe: this does not hit the network/need creds)
 bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime")
 ssm_client = boto3.client("ssm")
 
 
-def get_ssm_parameter(parameter_name):
+def _sanitize_session_id(raw: Optional[str]) -> str:
     """
-    Fetches the parameter value from SSM Parameter Store.
+    Sanitize a session ID for Bedrock Agent calls.
+
+    Rules:
+    - Allow only [a-zA-Z0-9._-]
+    - Replace any run of disallowed characters with a single '-'
+    - Collapse multiple separators into a single '-'
+    - Trim leading/trailing separators (., _, -)
+    - If the result is empty, return 'default-session'
+    - Cap length at 100
+
+    Examples:
+    - "972524347196|1" -> "972524347196-1"
+    - "@@@" -> "default-session"
+    """
+    if not raw:
+        return "default-session"
+
+    # Replace any sequence of disallowed chars with '-'
+    sanitized = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw)
+
+    # Collapse runs of separators into a single '-'
+    sanitized = re.sub(r"[-._]{2,}", "-", sanitized)
+
+    # Strip leading/trailing separators
+    sanitized = sanitized.strip("-._")
+
+    if not sanitized:
+        return "default-session"
+
+    if len(sanitized) > 100:
+        sanitized = sanitized[:100]
+
+    return sanitized
+
+
+def get_ssm_parameter(parameter_name: str) -> str:
+    """
+    Fetch the parameter value from SSM Parameter Store.
+    (Called at runtime; network call occurs here.)
     """
     response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)
     return response["Parameter"]["Value"]
@@ -28,7 +66,6 @@ def get_ssm_parameter(parameter_name):
 
 def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str:
     """Invoke the Bedrock agent and aggregate the streamed response text."""
-
     # TODO: Update to use PowerTools SSM Params for optimization
     agent_alias_param = get_ssm_parameter(
         f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-alias-id-full-string"
@@ -36,7 +73,12 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
     agent_alias_id = agent_alias_param.split("|")[-1]
     agent_id = get_ssm_parameter(f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id").strip()
 
-    resolved_session_id = session_id or "TempSessionBedrock"
+    # If session_id is provided, sanitize it. If it's None, use a fixed temp session.
+    resolved_session_id = (
+        _sanitize_session_id(session_id)
+        if session_id is not None
+        else "TempSessionBedrock"
+    )
 
     logger.debug(
         {
@@ -113,7 +155,4 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
         raise RuntimeError("Client error when invoking Bedrock agent") from exc
 
     logger.info(text_response)
-
-    # TODO: Add better error handling and validations/checks
-
     return text_response
