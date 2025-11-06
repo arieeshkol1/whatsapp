@@ -11,16 +11,11 @@ import requests
 # Own imports
 from common.helpers.secrets_helper import SecretsHelper
 from common.logger import custom_logger
-from state_machine.integrations.meta.api_utils import (
+from .api_utils import (
     get_api_endpoint,
     get_api_headers,
 )
-from state_machine.integrations.meta.schemas import MetaPostMessageModel
-
-
-SECRET_NAME = os.environ["SECRET_NAME"]
-secrets_helper = SecretsHelper(SECRET_NAME)
-auth_token = secrets_helper.get_secret_value("META_TOKEN")
+from .schemas import MetaPostMessageModel
 
 
 class MetaAPI:
@@ -28,21 +23,52 @@ class MetaAPI:
     Class that contains the base helpers for interacting with the Meta API.
     """
 
-    def __init__(self, logger: Optional[Logger] = None) -> None:
+    def __init__(
+        self,
+        logger: Optional[Logger] = None,
+        secret_name: Optional[str] = None,
+        secrets_helper: Optional[SecretsHelper] = None,
+    ) -> None:
         self.logger = logger or custom_logger()
+        self.secret_name = secret_name or os.environ.get("SECRET_NAME")
+        self._secrets_helper = secrets_helper
+        self.meta_secret_json: dict = {}
+        self.api_headers: dict = {}
+        self.api_endpoint: str = ""
+
+        if self._secrets_helper is None and self.secret_name:
+            self._secrets_helper = SecretsHelper(self.secret_name)
+
         self.load_meta_configurations()
 
     def load_meta_configurations(self) -> None:
         """
         Method to load Meta configurations from Secrets Manager and initialize endpoint and headers.
         """
+        if not self._secrets_helper:
+            if self.secret_name:
+                # secret name set but helper missing indicates dependency injection issue
+                raise RuntimeError("Secrets helper is not configured for MetaAPI")
+            self.logger.warning(
+                "Secrets helper not configured; Meta API requests will fail until configured."
+            )
+            return
+
         self.logger.debug("Loading Meta configurations from Secrets Manager...")
-        self.meta_secret_json = secrets_helper.get_secret_value()
+        self.meta_secret_json = self._secrets_helper.get_secret_value()
         _meta_token = self.meta_secret_json.get("META_TOKEN")
+        if not _meta_token:
+            raise RuntimeError("META_TOKEN is missing from the WhatsApp secret")
+
         _meta_from_phone_number_id = self.meta_secret_json.get(
             "META_FROM_PHONE_NUMBER_ID"
         )
-        self.api_headers = get_api_headers(bearer_token=auth_token)
+        if not _meta_from_phone_number_id:
+            raise RuntimeError(
+                "META_FROM_PHONE_NUMBER_ID is missing from the WhatsApp secret"
+            )
+
+        self.api_headers = get_api_headers(bearer_token=_meta_token)
         self.api_endpoint = get_api_endpoint(f"{_meta_from_phone_number_id}/messages")
 
     def post_message(
@@ -58,6 +84,11 @@ class MetaAPI:
         :param to_phone_number (str): Phone number to send the message to.
         :param original_message_id (str): Original message ID to reply to.
         """
+
+        if not self.api_headers or not self.api_endpoint:
+            raise RuntimeError(
+                "Meta API configuration is incomplete; ensure secrets are available"
+            )
 
         self.logger.info(f"Starting POST request to Meta API: {self.api_endpoint}")
         self.logger.debug(f"Headers to send: {self.api_headers}")
