@@ -161,6 +161,15 @@ class ChatbotAPIStack(Stack):
             "backend",
         )
 
+        rules_table_name = self.app_config.get("rules_table_name")
+        rules_table = None
+        if rules_table_name:
+            rules_table = aws_dynamodb.Table.from_table_name(
+                self,
+                "RulesConfigTable",
+                table_name=rules_table_name,
+            )
+
         # Lambda Function for WhatsApp input messages (Meta WebHook)
         self.lambda_whatsapp_webhook = aws_lambda.Function(
             self,
@@ -208,6 +217,16 @@ class ChatbotAPIStack(Stack):
 
         # Lambda Function that will run the State Machine steps for processing the messages
         # TODO: In the future, can be migrated to MULTIPLE Lambda Functions for each step...
+        state_machine_environment = {
+            "ENVIRONMENT": self.app_config["deployment_environment"],
+            "LOG_LEVEL": self.app_config["log_level"],
+            "SECRET_NAME": self.app_config["secret_name"],
+            "META_ENDPOINT": self.app_config["meta_endpoint"],
+            "DYNAMODB_TABLE": self.dynamodb_table.table_name,
+        }
+        if rules_table_name:
+            state_machine_environment["RULES_TABLE_NAME"] = rules_table_name
+
         self.lambda_state_machine_process_message = aws_lambda.Function(
             self,
             "Lambda-SM-Process-Message",
@@ -217,7 +236,7 @@ class ChatbotAPIStack(Stack):
             code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
             timeout=Duration.seconds(60),
             memory_size=512,
-            environment=self._build_state_machine_lambda_environment(),
+            environment=state_machine_environment,
             layers=[
                 self.lambda_layer_powertools,
                 self.lambda_layer_common,
@@ -227,10 +246,8 @@ class ChatbotAPIStack(Stack):
         self.dynamodb_table.grant_read_write_data(
             self.lambda_state_machine_process_message
         )
-        if self.rules_dynamodb_table:
-            self.rules_dynamodb_table.grant_read_data(
-                self.lambda_state_machine_process_message
-            )
+        if rules_table is not None:
+            rules_table.grant_read_write_data(self.lambda_state_machine_process_message)
         self.lambda_state_machine_process_message.role.add_managed_policy(
             aws_iam.ManagedPolicy.from_aws_managed_policy_name(
                 "AmazonSSMReadOnlyAccess",

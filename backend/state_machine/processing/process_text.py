@@ -16,7 +16,7 @@ from common.conversation_state import (
 )
 from common.rules_config import get_rules_text
 
-from state_machine.processing.bedrock_agent import call_bedrock_agent
+from state_machine.processing.customer_flow import ConversationFlow
 
 
 logger = custom_logger()
@@ -106,109 +106,17 @@ class ProcessText(BaseStepFunction):
 
         self.logger.info("Starting process_text for the chatbot")
 
-        message_payload = (
-            self.event.get("input", {}).get("dynamodb", {}).get("NewImage", {})
-        )
-        self.text = self.event.get("text") or message_payload.get("text", {}).get(
-            "S", "DEFAULT_RESPONSE"
-        )
-        from_number = self.event.get("from_number") or message_payload.get(
-            "from_number", {}
-        ).get("S")
-        conversation_id = self.event.get("conversation_id", 1)
-        current_whatsapp_id = self.event.get("whatsapp_id") or message_payload.get(
-            "whatsapp_id", {}
-        ).get("S", "")
-
-        history_items = _fetch_conversation_history(from_number, conversation_id)
-        history_lines = _format_history_messages(history_items, current_whatsapp_id)
-
-        customer_profile = load_customer_profile(from_number)
-        customer_summary: Optional[str] = (
-            format_customer_summary(customer_profile) if customer_profile else None
+        record = (
+            self.event.get("input", {})
+            .get("dynamodb", {})
+            .get("NewImage", {})
         )
 
-        partition_key = f"NUMBER#{from_number}" if from_number else None
-        conversation_state: Dict[str, Any] = {}
-        order_progress_summary: Optional[str] = None
+        self.text = record.get("text", {}).get("S", "DEFAULT_RESPONSE")
+        phone_number = record.get("from_number", {}).get("S", "unknown")
 
-        if partition_key and _history_helper:
-            try:
-                stored_state = _history_helper.get_conversation_state(
-                    partition_key, conversation_id
-                )
-                if isinstance(stored_state, dict):
-                    conversation_state = stored_state
-            except Exception:  # pragma: no cover - defensive logging
-                logger.exception("Failed to fetch conversation state")
-
-        inferred_updates = extract_state_updates_from_message(self.text)
-        provided_updates = (
-            self.event.get("conversation_state_updates")
-            if isinstance(self.event.get("conversation_state_updates"), dict)
-            else {}
-        )
-
-        combined_updates: Dict[str, Any] = {}
-        combined_updates.update(inferred_updates)
-        combined_updates.update(provided_updates)
-
-        if combined_updates:
-            conversation_state = merge_conversation_state(
-                conversation_state, combined_updates
-            )
-            if partition_key and _history_helper:
-                try:
-                    _history_helper.put_conversation_state(
-                        partition_key, conversation_id, conversation_state
-                    )
-                except Exception:  # pragma: no cover - defensive logging
-                    logger.exception("Failed to persist conversation state")
-
-        order_progress_summary = format_order_progress_summary(conversation_state)
-
-        self.logger.info(
-            "Prepared conversation context",
-            extra={
-                "conversation_id": conversation_id,
-                "history_message_count": len(history_lines),
-                "has_customer_profile": bool(customer_summary),
-                "has_conversation_state": bool(conversation_state),
-            },
-        )
-
-        context_sections: List[str] = []
-
-        rules_text = get_rules_text()
-        if rules_text:
-            context_sections.append(rules_text)
-
-        if customer_summary:
-            context_sections.append(customer_summary)
-
-        if order_progress_summary:
-            context_sections.append(order_progress_summary)
-
-        if history_lines:
-            history_block = "\n".join(history_lines)
-            context_sections.append(
-                f"היסטוריית השיחה עבור הנושא הנוכחי:\n{history_block}"
-            )
-
-        context_sections.append(f"הודעת הלקוח כעת:\n{self.text}")
-
-        input_text = "\n\n".join(context_sections)
-
-        session_identifier = _build_session_id(
-            from_number=from_number,
-            conversation_id=conversation_id,
-            fallback=self.correlation_id,
-        )
-
-        self.response_message = call_bedrock_agent(
-            session_id=session_identifier,
-            input_text=input_text,
-        )
+        conversation = ConversationFlow(phone_number)
+        self.response_message = conversation.handle(self.text)
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
