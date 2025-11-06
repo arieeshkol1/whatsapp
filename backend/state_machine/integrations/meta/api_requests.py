@@ -15,7 +15,7 @@ from .api_utils import (
     get_api_endpoint,
     get_api_headers,
 )
-from .schemas import MetaPostMessageModel
+from state_machine.integrations.meta.schemas import MetaPostMessageModel
 
 
 class MetaAPI:
@@ -31,13 +31,13 @@ class MetaAPI:
     ) -> None:
         self.logger = logger or custom_logger()
         self.secret_name = secret_name or os.environ.get("SECRET_NAME")
-        self._secrets_helper = secrets_helper
-        self.meta_secret_json: dict = {}
+        self.secrets_helper = secrets_helper
         self.api_headers: dict = {}
         self.api_endpoint: str = ""
+        self.meta_secret_json: dict = {}
 
-        if self._secrets_helper is None and self.secret_name:
-            self._secrets_helper = SecretsHelper(self.secret_name)
+        if self.secrets_helper is None and self.secret_name:
+            self.secrets_helper = SecretsHelper(self.secret_name)
 
         self.load_meta_configurations()
 
@@ -45,17 +45,13 @@ class MetaAPI:
         """
         Method to load Meta configurations from Secrets Manager and initialize endpoint and headers.
         """
-        if not self._secrets_helper:
-            if self.secret_name:
-                # secret name set but helper missing indicates dependency injection issue
-                raise RuntimeError("Secrets helper is not configured for MetaAPI")
-            self.logger.warning(
-                "Secrets helper not configured; Meta API requests will fail until configured."
+        if not self.secrets_helper:
+            raise RuntimeError(
+                "MetaAPI secret configuration is missing; provide SECRET_NAME or a SecretsHelper instance"
             )
-            return
 
         self.logger.debug("Loading Meta configurations from Secrets Manager...")
-        self.meta_secret_json = self._secrets_helper.get_secret_value()
+        self.meta_secret_json = self.secrets_helper.get_secret_value()
         _meta_token = self.meta_secret_json.get("META_TOKEN")
         if not _meta_token:
             raise RuntimeError("META_TOKEN is missing from the WhatsApp secret")
@@ -63,6 +59,8 @@ class MetaAPI:
         _meta_from_phone_number_id = self.meta_secret_json.get(
             "META_FROM_PHONE_NUMBER_ID"
         )
+        if not _meta_token:
+            raise RuntimeError("META_TOKEN is missing from the WhatsApp secret")
         if not _meta_from_phone_number_id:
             raise RuntimeError(
                 "META_FROM_PHONE_NUMBER_ID is missing from the WhatsApp secret"
