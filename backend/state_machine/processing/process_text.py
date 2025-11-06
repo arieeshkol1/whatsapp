@@ -106,11 +106,7 @@ class ProcessText(BaseStepFunction):
 
         self.logger.info("Starting process_text for the chatbot")
 
-        record = (
-            self.event.get("input", {})
-            .get("dynamodb", {})
-            .get("NewImage", {})
-        )
+        record = self.event.get("input", {}).get("dynamodb", {}).get("NewImage", {})
 
         self.text = record.get("text", {}).get("S", "DEFAULT_RESPONSE")
         phone_number = record.get("from_number", {}).get("S", "unknown")

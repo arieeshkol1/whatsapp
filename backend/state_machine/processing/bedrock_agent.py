@@ -53,8 +53,6 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
 
     bedrock_client = _bedrock_client()
 
-    sanitized_session_id = _sanitize_session_id(session_id)
-
     try:
         response = bedrock_client.invoke_agent(
             agentAliasId=agent_alias_id,
