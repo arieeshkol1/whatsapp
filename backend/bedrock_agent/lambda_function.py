@@ -123,6 +123,8 @@ def action_group_create_bundles(parameters):
 
 
 def lambda_handler(event, context):
+    import json
+
     action_group = event["actionGroup"]
     _function = event["function"]
     parameters = event.get("parameters", [])
@@ -168,6 +170,6 @@ def lambda_handler(event, context):
         "response": action_response,
         "messageVersion": event["messageVersion"],
     }
-    print("Response: {}".format(function_response))
 
+    print("Response: {}".format(function_response))
     return function_response
