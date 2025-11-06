@@ -14,7 +14,7 @@ from common.conversation_state import (
     merge_conversation_state,
 )
 from common.rules_config import get_rules_text
-from state_machine.processing.customer_flow import ConversationFlow
+from .customer_flow import ConversationFlow
 
 logger = custom_logger()
 
