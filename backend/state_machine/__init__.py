@@ -9,16 +9,16 @@ import os
 
 if os.environ.get("STATE_MACHINE_IMPORT_MODE") == "minimal":
     # Minimal import surface for unit tests that do not require AWS clients.
-    from state_machine.processing.process_text import ProcessText  # noqa
+    from .processing.process_text import ProcessText  # noqa
 else:
     # Validation
-    from state_machine.utils.validate_message import ValidateMessage  # noqa
+    from .utils.validate_message import ValidateMessage  # noqa
 
     # Processing
-    from state_machine.processing.process_text import ProcessText  # noqa
-    from state_machine.processing.process_voice import ProcessVoice  # noqa
-    from state_machine.processing.send_message import SendMessage  # noqa
+    from .processing.process_text import ProcessText  # noqa
+    from .processing.process_voice import ProcessVoice  # noqa
+    from .processing.send_message import SendMessage  # noqa
 
     # Utils
-    from state_machine.utils.success import Success  # noqa
-    from state_machine.utils.failure import Failure  # noqa
+    from .utils.success import Success  # noqa
+    from .utils.failure import Failure  # noqa
