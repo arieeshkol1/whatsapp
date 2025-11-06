@@ -2,6 +2,10 @@ import json
 import importlib
 import traceback
 
+<<<<<<< HEAD
+# Own imports
+from .__init__ import *  # noqa NOSONAR
+=======
 from common.logger import custom_logger
 
 logger = custom_logger()
@@ -17,6 +21,7 @@ CLASS_MODULE_MAP = {
     "Success": "state_machine.utils.success",
     "Failure": "state_machine.utils.failure",
 }
+>>>>>>> origin/main
 
 
 def _camel_to_snake(name: str) -> str:

@@ -1,4 +1,11 @@
 # Own imports
+<<<<<<< HEAD
+from ..base_step_function import BaseStepFunction
+from common.enums import WhatsAppMessageTypes
+from common.logger import custom_logger
+
+from .customer_flow import ConversationFlow
+=======
 import os
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +24,7 @@ from common.conversation_state import (
 from common.rules_config import get_rules_text
 
 from state_machine.processing.customer_flow import ConversationFlow
+>>>>>>> origin/main
 
 
 logger = custom_logger()

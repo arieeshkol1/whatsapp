@@ -8,7 +8,13 @@ import requests
 from botocore.exceptions import ClientError
 from requests.adapters import HTTPAdapter, Retry
 
+<<<<<<< HEAD
+# Own imports
+from ..base_step_function import BaseStepFunction
+from ..integrations.meta.api_requests import MetaAPI
+=======
 from state_machine.base_step_function import BaseStepFunction
+>>>>>>> origin/main
 from common.logger import custom_logger
 
 

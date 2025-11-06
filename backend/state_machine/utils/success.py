@@ -1,6 +1,6 @@
 # Own imports
 from common.logger import custom_logger
-from state_machine.base_step_function import BaseStepFunction
+from ..base_step_function import BaseStepFunction
 
 
 logger = custom_logger()
