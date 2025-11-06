@@ -13,20 +13,16 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT")
 
 logger = custom_logger()
 
-
-def _bedrock_client():
-    return boto3.client("bedrock-agent-runtime")
-
-
-def _ssm_client():
-    return boto3.client("ssm")
+# Create a bedrock runtime client
+bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime")
+ssm_client = boto3.client("ssm")
 
 
 def get_ssm_parameter(parameter_name):
     """
     Fetches the parameter value from SSM Parameter Store.
     """
-    response = _ssm_client().get_parameter(Name=parameter_name, WithDecryption=True)
+    response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)
     return response["Parameter"]["Value"]
 
 
@@ -51,10 +47,8 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
         }
     )
 
-    bedrock_client = _bedrock_client()
-
     try:
-        response = bedrock_client.invoke_agent(
+        response = bedrock_agent_runtime_client.invoke_agent(
             agentAliasId=agent_alias_id,
             agentId=agent_id,
             enableTrace=False,
@@ -84,7 +78,7 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
                         "session_id": resolved_session_id,
                     }
                 )
-    except bedrock_client.exceptions.AccessDeniedException as exc:  # type: ignore[attr-defined]
+    except bedrock_agent_runtime_client.exceptions.AccessDeniedException as exc:
         logger.error(
             {
                 "message": "Access denied when invoking Bedrock agent",
