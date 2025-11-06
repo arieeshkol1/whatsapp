@@ -1,7 +1,7 @@
 """Load configurable conversation rules from DynamoDB.
 
 The WhatsApp chatbot uses a dedicated DynamoDB table to hold the
-conversation flow definition.  This module reads the ruleset (and seeds a
+conversation flow definition. This module reads the ruleset (and seeds a
 baseline definition when the table is empty) so the runtime behaviour can be
 updated without redeploying Lambda code.
 """
@@ -160,9 +160,8 @@ def _should_use_stub_rules() -> bool:
 
 
 def _get_rules_table_name() -> str:
+    # Make RULES_TABLE_NAME optional: an empty string means "use defaults"
     table_name = os.environ.get("RULES_TABLE_NAME")
-    if not table_name and not _should_use_stub_rules():
-        raise RuntimeError("RULES_TABLE_NAME environment variable is required")
     return table_name or ""
 
 
@@ -207,12 +206,13 @@ def _deserialize_rules(item: Dict[str, Any]) -> Dict[str, Any]:
 @lru_cache(maxsize=1)
 def load_ruleset() -> Dict[str, Any]:
     """Return the current ruleset, seeding defaults when the table is empty."""
-
+    # If tests or local runs want to bypass DynamoDB entirely
     if _should_use_stub_rules():
         return DEFAULT_RULESET
 
     table = _get_rules_table()
     if table is None:
+        # No RULES_TABLE_NAME provided → just use the built-in defaults
         return DEFAULT_RULESET
 
     try:
