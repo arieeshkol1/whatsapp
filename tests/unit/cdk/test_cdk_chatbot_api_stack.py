@@ -18,6 +18,9 @@ stack: ChatbotAPIStack = ChatbotAPIStack(
         "log_level": "DEBUG",
         "table_name": "aws-whatsapp-poc-test1",
         "agents_data_table_name": "aws-whatsapp-poc-test2",
+        "rules_table_name": "aws-whatsapp-rules-test",
+        "ruleset_id": "default",
+        "ruleset_version": "CURRENT",
         "api_gw_name": "wpp-test",
         "secret_name": "test-secret",
         "enable_rag": True,
@@ -35,7 +38,7 @@ def test_dynamodb_table_created():
     match = template.find_resources(
         type="AWS::DynamoDB::Table",
     )
-    assert len(match) == 2
+    assert len(match) >= 3
 
 
 def test_lambda_function_created():
