@@ -33,9 +33,7 @@ _ALLOWED = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _sanitize_session_id(
-    raw: Optional[str],
-    default: str = "default-session",
-    max_len: int = 256,
+    raw: Optional[str], default: str = "default-session", max_len: int = 256
 ) -> str:
     """
     Normalize a session id to characters Bedrock accepts.
@@ -46,9 +44,9 @@ def _sanitize_session_id(
     s = (raw or "").strip()
     if not s:
         return default
-    s = s.replace("|", "-")               # normalize separator
-    s = _ALLOWED.sub("-", s)              # collapse disallowed chars
-    s = s.strip("-")                      # trim leading/trailing dashes
+    s = s.replace("|", "-")  # normalize separator
+    s = _ALLOWED.sub("-", s)  # collapse disallowed chars
+    s = s.strip("-")  # trim leading/trailing dashes
     if not s:
         return default
     if len(s) > max_len:
@@ -146,5 +144,4 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
     logger.info(text_response)
 
     # TODO: Add better error handling and validations/checks
-
     return text_response
