@@ -75,6 +75,9 @@ class ChatbotAPIStack(Stack):
             self._resolve_bedrock_foundation_model_id()
         )
 
+        # Placeholder for optional resources initialised in later steps
+        self.rules_dynamodb_table = None
+
         # Main methods for the deployment
         self.import_secrets()
         self.create_dynamodb_table()
@@ -224,6 +227,10 @@ class ChatbotAPIStack(Stack):
         self.dynamodb_table.grant_read_write_data(
             self.lambda_state_machine_process_message
         )
+        if self.rules_dynamodb_table:
+            self.rules_dynamodb_table.grant_read_data(
+                self.lambda_state_machine_process_message
+            )
         self.lambda_state_machine_process_message.role.add_managed_policy(
             aws_iam.ManagedPolicy.from_aws_managed_policy_name(
                 "AmazonSSMReadOnlyAccess",
@@ -301,6 +308,16 @@ class ChatbotAPIStack(Stack):
         }
 
         for key, value in optional_values.items():
+            if value:
+                base_environment[key] = value
+
+        optional_rules_environment = {
+            "RULES_TABLE_NAME": self.app_config.get("rules_table_name"),
+            "RULESET_ID": self.app_config.get("ruleset_id"),
+            "RULESET_VERSION": self.app_config.get("ruleset_version"),
+        }
+
+        for key, value in optional_rules_environment.items():
             if value:
                 base_environment[key] = value
 
@@ -660,6 +677,25 @@ class ChatbotAPIStack(Stack):
         Tags.of(self.agents_data_dynamodb_table).add(
             "Name", self.app_config["agents_data_table_name"]
         )
+
+        rules_table_name = self.app_config.get("rules_table_name")
+        if rules_table_name:
+            self.rules_dynamodb_table = aws_dynamodb.Table(
+                self,
+                "DynamoDB-Table-Rules",
+                table_name=rules_table_name,
+                partition_key=aws_dynamodb.Attribute(
+                    name="PK", type=aws_dynamodb.AttributeType.STRING
+                ),
+                sort_key=aws_dynamodb.Attribute(
+                    name="SK", type=aws_dynamodb.AttributeType.STRING
+                ),
+                billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+            Tags.of(self.rules_dynamodb_table).add("Name", rules_table_name)
+        else:
+            self.rules_dynamodb_table = None
 
         # Add permissions to the Lambda function resource policy. You use a resource-based policy to allow an AWS service to invoke your function.
         self.lambda_action_groups.add_permission(

@@ -130,39 +130,7 @@ def lambda_handler(event, context):
     print("PARAMETERS ARE: ", parameters)
     print("ACTION GROUP IS: ", action_group)
 
-    # --- Load Bedrock config JSON from DynamoDB ---
-   from datetime import datetime, timedelta, timezone
-
-# Extract user phone number from event
-user_number = event.get("from_number")
-pk = f"NUMBER#{user_number}"
-
-# Get current and past hour ISO timestamps
-now = datetime.now(timezone.utc)
-one_hour_ago = now - timedelta(hours=1)
-
-# Query all messages or records from that number
-user_items = query_dynamodb_pk_sk(partition_key=pk, sort_key_portion="MESSAGE#")
-
-# Filter records created within the past hour
-recent_records = [
-    item for item in user_items
-    if "created_at" in item
-    and datetime.fromisoformat(item["created_at"]) >= one_hour_ago
-]
-
-# Use latest item (if any) as config
-bedrock_config = recent_records[-1] if recent_records else {}
-print("Loaded dynamic Bedrock config:", bedrock_config)
-  
-
-
-
-
-    bedrock_config = config_items[0] if config_items else {}
-    print("Loaded Bedrock config:", bedrock_config)
-
-    # --- Run the action group logic ---
+    # TODO: enhance this If-Statement approach to a dynamic one...
     if action_group == "LookupCatalog":
         results = action_group_lookup_catalog(parameters)
     elif action_group == "SuggestPairings":

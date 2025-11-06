@@ -14,6 +14,7 @@ from common.conversation_state import (
     format_order_progress_summary,
     merge_conversation_state,
 )
+from common.rules_config import get_rules_text
 
 from state_machine.processing.bedrock_agent import call_bedrock_agent
 
@@ -177,6 +178,10 @@ class ProcessText(BaseStepFunction):
         )
 
         context_sections: List[str] = []
+
+        rules_text = get_rules_text()
+        if rules_text:
+            context_sections.append(rules_text)
 
         if customer_summary:
             context_sections.append(customer_summary)

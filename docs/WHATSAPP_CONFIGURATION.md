@@ -57,3 +57,17 @@ In order to correctly configure the Meta Developer settings and projects (only o
    - Assign permissions "whatsapp_business_messaging" and "whatsapp_business_management"
    - Click on "Generate token"
    - Store the token in a secret and encrypted place (in my case it was "Secrets Manager" on AWS)
+
+## Environment Variables (AWS Lambda Functions)
+
+| Environment variable | Description |
+| --- | --- |
+| `ENVIRONMENT` | Deployment environment (e.g. `dev`, `prod`). |
+| `LOG_LEVEL` | Log level for the Lambda functions. |
+| `SECRET_NAME` | Secrets Manager entry containing WhatsApp credentials. |
+| `META_ENDPOINT` | Base URL for the Meta Graph API. |
+| `AGENT_ID` / `BEDROCK_AGENT_ID` | Optional overrides for the Bedrock agent identifier. |
+| `AGENT_ALIAS_ID` / `BEDROCK_AGENT_ALIAS_ID` | Optional overrides for the Bedrock agent alias identifier. |
+| `RULES_TABLE_NAME` | (Optional) DynamoDB table storing runtime conversation rules. |
+| `RULESET_ID` | Partition identifier for the rule set (defaults to `default`). |
+| `RULESET_VERSION` | Version label for the rule document (defaults to `CURRENT`). |
