@@ -1,5 +1,6 @@
 # Built-in imports
 import os
+import re
 from typing import Optional
 
 import boto3
@@ -7,7 +8,6 @@ from botocore.exceptions import ClientError, EventStreamError
 
 # Own imports
 from common.logger import custom_logger
-
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT")
 
@@ -18,12 +18,42 @@ bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime")
 ssm_client = boto3.client("ssm")
 
 
-def get_ssm_parameter(parameter_name):
+def get_ssm_parameter(parameter_name: str) -> str:
     """
     Fetches the parameter value from SSM Parameter Store.
     """
     response = ssm_client.get_parameter(Name=parameter_name, WithDecryption=True)
     return response["Parameter"]["Value"]
+
+
+# -----------------------------
+# Session ID sanitization utils
+# -----------------------------
+_ALLOWED = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_session_id(
+    raw: Optional[str],
+    default: str = "default-session",
+    max_len: int = 256,
+) -> str:
+    """
+    Normalize a session id to characters Bedrock accepts.
+    - Replace '|' and any disallowed chars with '-'
+    - Trim to max_len
+    - If empty after cleanup, return default
+    """
+    s = (raw or "").strip()
+    if not s:
+        return default
+    s = s.replace("|", "-")               # normalize separator
+    s = _ALLOWED.sub("-", s)              # collapse disallowed chars
+    s = s.strip("-")                      # trim leading/trailing dashes
+    if not s:
+        return default
+    if len(s) > max_len:
+        s = s[:max_len]
+    return s
 
 
 def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str:
@@ -36,7 +66,8 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
     agent_alias_id = agent_alias_param.split("|")[-1]
     agent_id = get_ssm_parameter(f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id").strip()
 
-    resolved_session_id = session_id or "TempSessionBedrock"
+    # Sanitize/normalize the session id to acceptable characters
+    resolved_session_id = _sanitize_session_id(session_id or "TempSessionBedrock")
 
     logger.debug(
         {
