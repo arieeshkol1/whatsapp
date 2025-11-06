@@ -1,9 +1,8 @@
 # Built-in imports
 from datetime import datetime
 
-# Own imports
-from state_machine.base_step_function import BaseStepFunction
-from state_machine.integrations.meta.api_requests import MetaAPI
+from ..base_step_function import BaseStepFunction
+from ..integrations.meta.api_requests import MetaAPI
 from common.logger import custom_logger
 
 
