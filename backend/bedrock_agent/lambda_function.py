@@ -1,6 +1,8 @@
 # NOTE: This is a super-MVP code for testing. Still has a lot of gaps to solve/fix. Do not use in prod.
 # TODO: Refactor solution to a standalone router for all Action Groups
 
+import json
+
 from typing import Any, Dict, List, Optional
 
 from bedrock_agent.dynamodb_helper import query_dynamodb_pk_sk
@@ -140,15 +142,22 @@ def lambda_handler(event, context):
     else:
         raise ValueError(f"Action Group <{action_group}> not supported.")
 
-    # --- Build prompt to send to Bedrock ---
+    bedrock_config = {
+        "action_group": action_group,
+        "function": _function,
+        "parameters": parameters,
+        "results": results,
+    }
+
     config_as_text = json.dumps(bedrock_config, indent=2, ensure_ascii=False)
     user_message = "\n-".join(results)
-    full_prompt = f"Settings:\n{config_as_text}\n\nAnswer the following:\n{user_message}"
+    full_prompt = (
+        f"Settings:\n{config_as_text}\n\nAnswer the following:\n{user_message}"
+    )
 
-    # --- Build response body ---
     response_body = {
         "TEXT": {"body": full_prompt},
-        "bedrock_config": bedrock_config  # included for downstream processing
+        "bedrock_config": bedrock_config,
     }
 
     action_response = {
