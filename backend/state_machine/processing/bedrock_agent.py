@@ -1,8 +1,6 @@
 # Built-in imports
 import os
-import re
-from functools import lru_cache
-from typing import Optional, Tuple
+from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError, EventStreamError
@@ -11,20 +9,9 @@ from botocore.exceptions import ClientError, EventStreamError
 from common.logger import custom_logger
 
 
+ENVIRONMENT = os.environ.get("ENVIRONMENT")
+
 logger = custom_logger()
-
-_DEFAULT_SESSION_ID = "default-session"
-_MAX_SESSION_ID_LENGTH = 128
-_SESSION_ID_PATTERN = re.compile(r"[^0-9a-zA-Z._:-]+")
-
-_ENVIRONMENT_FALLBACK = "dev"
-_AGENT_ID_ENV_VARS = ("BEDROCK_AGENT_ID", "AGENT_ID")
-_AGENT_ALIAS_ENV_VARS = (
-    "BEDROCK_AGENT_ALIAS_ID",
-    "AGENT_ALIAS_ID",
-    "BEDROCK_AGENT_ALIAS_ID_FULL_STRING",
-    "AGENT_ALIAS_ID_FULL_STRING",
-)
 
 
 def _bedrock_client():
@@ -35,103 +22,25 @@ def _ssm_client():
     return boto3.client("ssm")
 
 
-def _environment_name() -> str:
-    env_name = os.environ.get("ENVIRONMENT") or os.environ.get("ENV")
-    if not env_name:
-        logger.debug(
-            "ENVIRONMENT not set; falling back to %s for parameter resolution",
-            _ENVIRONMENT_FALLBACK,
-        )
-        env_name = _ENVIRONMENT_FALLBACK
-    return env_name
-
-
-def _parameter_name(suffix: str) -> str:
-    return f"/{_environment_name()}/aws-wpp/{suffix}"
-
-
-@lru_cache(maxsize=8)
-def get_ssm_parameter(parameter_name: str) -> str:
-    """Fetch a parameter from SSM Parameter Store (cached)."""
-
+def get_ssm_parameter(parameter_name):
+    """
+    Fetches the parameter value from SSM Parameter Store.
+    """
     response = _ssm_client().get_parameter(Name=parameter_name, WithDecryption=True)
     return response["Parameter"]["Value"]
-
-
-def _first_defined(*candidates: Optional[str]) -> Optional[str]:
-    for candidate in candidates:
-        if candidate:
-            stripped = candidate.strip()
-            if stripped:
-                return stripped
-    return None
-
-
-def _normalize_alias(alias_value: str) -> str:
-    value = alias_value.strip()
-    if "|" in value:
-        value = value.split("|")[-1].strip()
-    if value.startswith("arn:"):
-        value = value.rsplit("/", 1)[-1]
-    return value
-
-
-@lru_cache(maxsize=1)
-def _resolve_agent_configuration() -> Tuple[str, str]:
-    """Return the agent and alias identifiers from env vars or SSM."""
-
-    agent_id = _first_defined(*(os.environ.get(var) for var in _AGENT_ID_ENV_VARS))
-    alias_value = _first_defined(
-        *(os.environ.get(var) for var in _AGENT_ALIAS_ENV_VARS)
-    )
-
-    if agent_id is None:
-        agent_id = get_ssm_parameter(_parameter_name("bedrock-agent-id")).strip()
-
-    if alias_value is None:
-        alias_value = get_ssm_parameter(
-            _parameter_name("bedrock-agent-alias-id-full-string")
-        ).strip()
-
-    alias_id = _normalize_alias(alias_value)
-
-    if not agent_id:
-        raise RuntimeError("Unable to resolve Bedrock agent identifier")
-    if not alias_id:
-        raise RuntimeError("Unable to resolve Bedrock agent alias identifier")
-
-    return agent_id, alias_id
-
-
-def _sanitize_session_id(session_id: Optional[str]) -> str:
-    """Ensure the supplied session identifier only uses supported characters."""
-
-    if not session_id:
-        return _DEFAULT_SESSION_ID
-
-    sanitized = _SESSION_ID_PATTERN.sub("-", session_id)
-    sanitized = sanitized.strip("-")
-    if not sanitized:
-        return _DEFAULT_SESSION_ID
-    if len(sanitized) > _MAX_SESSION_ID_LENGTH:
-        sanitized = sanitized[:_MAX_SESSION_ID_LENGTH]
-    return sanitized
 
 
 def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str:
     """Invoke the Bedrock agent and aggregate the streamed response text."""
 
-    agent_id, agent_alias_id = _resolve_agent_configuration()
+    # TODO: Update to use PowerTools SSM Params for optimization
+    agent_alias_param = get_ssm_parameter(
+        f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-alias-id-full-string"
+    ).strip()
+    agent_alias_id = agent_alias_param.split("|")[-1]
+    agent_id = get_ssm_parameter(f"/{ENVIRONMENT}/aws-wpp/bedrock-agent-id").strip()
 
-    resolved_session_id = _sanitize_session_id(session_id)
-    if session_id and session_id != resolved_session_id:
-        logger.debug(
-            "Sanitized session identifier",
-            extra={
-                "original_session_id": session_id,
-                "sanitized_session_id": resolved_session_id,
-            },
-        )
+    resolved_session_id = session_id or "TempSessionBedrock"
 
     logger.debug(
         {
@@ -211,7 +120,6 @@ def call_bedrock_agent(input_text: str, session_id: Optional[str] = None) -> str
 
     logger.info(text_response)
 
+    # TODO: Add better error handling and validations/checks
+
     return text_response
-
-
-__all__ = ["call_bedrock_agent"]
