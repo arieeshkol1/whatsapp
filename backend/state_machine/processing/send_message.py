@@ -1,20 +1,14 @@
 import os
 import re
 import json
-from typing import Iterable, Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any
 
 import boto3
 import requests
 from botocore.exceptions import ClientError
 from requests.adapters import HTTPAdapter, Retry
 
-<<<<<<< HEAD
-# Own imports
-from ..base_step_function import BaseStepFunction
-from ..integrations.meta.api_requests import MetaAPI
-=======
 from state_machine.base_step_function import BaseStepFunction
->>>>>>> origin/main
 from common.logger import custom_logger
 
 
@@ -366,7 +360,6 @@ class SendMessage(BaseStepFunction):
         if not pf.get("ok"):
             # If Meta is clearly saying expired/invalid -> treat as OAuth expired and try next stage
             pf_err = pf.get("error") or {}
-            # Normalize to the same shape our _is_oauth_expired_* expects
             normalized_err = {
                 "meta_error": {
                     "message": (pf_err.get("error") or {}).get("message")
@@ -486,7 +479,6 @@ class SendMessage(BaseStepFunction):
                     response, phone_id, base_url, stage_used = self._try_send_with(
                         secret_name=secret_name, stage=stage, payload=payload
                     )
-                    # Success – return immediately
                     self.logger.info(
                         "WhatsApp message sent successfully",
                         extra={
@@ -522,7 +514,6 @@ class SendMessage(BaseStepFunction):
                         },
                     )
 
-                    # If token expired – try next stage; else bubble up now
                     if _is_oauth_expired_str(err_str):
                         continue
                     else:
