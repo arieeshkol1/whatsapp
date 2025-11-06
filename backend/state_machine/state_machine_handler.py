@@ -1,46 +1,119 @@
-# External imports
-from aws_lambda_powertools import Logger
-from aws_lambda_powertools.utilities.typing import LambdaContext
+import json
+import importlib
+import traceback
+from typing import Tuple
 
-# Own imports
-from state_machine.__init__ import *  # noqa NOSONAR
+from common.logger import custom_logger
+
+logger = custom_logger()
+
+# Resolve to the backend.state_machine package to avoid collisions
+CLASS_MODULE_MAP = {
+    "SendMessage": "backend.state_machine.processing.send_message",
+    "ProcessText": "backend.state_machine.processing.process_text",
+    "ProcessVoice": "backend.state_machine.processing.process_voice",
+    "ValidateMessage": "backend.state_machine.processing.validate_message",
+    "Success": "backend.state_machine.utils.success",
+    "Failure": "backend.state_machine.utils.failure",
+}
 
 
-logger = Logger(
-    service="wpp-chatbot-sm-general",
-    log_uncaught_exceptions=True,
-    owner="Santiago Garcia Arango",
-)
+def _camel_to_snake(name: str) -> str:
+    pieces = []
+    for index, char in enumerate(name):
+        if char.isupper() and index != 0:
+            pieces.append("_")
+        pieces.append(char.lower())
+    return "".join(pieces)
 
 
-@logger.inject_lambda_context(log_event=True)
-def lambda_handler(event: dict, context: LambdaContext):
-    main_event = {}
+def _extract_params_and_event(raw_event: dict) -> Tuple[str, str, dict]:
+    params = (raw_event or {}).get("params") or {}
+    class_name = params.get("class_name")
+    method_name = params.get("method_name")
+    inner_event = (
+        raw_event.get("event")
+        if isinstance(raw_event, dict) and "event" in raw_event
+        else raw_event
+    )
+    return class_name, method_name, inner_event
+
+
+def _resolve_target(class_name: str, method_name: str):
+    if not class_name:
+        raise ValueError("Missing params.class_name")
+    if not method_name:
+        raise ValueError("Missing params.method_name")
+
+    module_name = CLASS_MODULE_MAP.get(class_name)
+    candidate_modules = []
+    if module_name:
+        candidate_modules.append(module_name)
+    else:
+        snake_name = _camel_to_snake(class_name)
+        candidate_modules.extend(
+            (
+                f"backend.state_machine.processing.{snake_name}",
+                f"backend.state_machine.utils.{snake_name}",
+            )
+        )
+
+    module = None
+    last_exception = None
+    for candidate in candidate_modules:
+        try:
+            module = importlib.import_module(candidate)
+            module_name = candidate
+            break
+        except ModuleNotFoundError as exc:
+            last_exception = exc
+    if module is None:
+        raise ModuleNotFoundError(
+            f"Could not resolve module for class '{class_name}'"
+        ) from last_exception
+
+    clazz = getattr(module, class_name, None)
+    if clazz is None:
+        raise ImportError(f"Class '{class_name}' not found in module '{module_name}'")
+
+    target = getattr(clazz, method_name, None)
+    if target is None or not callable(target):
+        raise AttributeError(
+            f"Method '{method_name}' not found/callable on class '{class_name}'"
+        )
+
+    return clazz, method_name
+
+
+def lambda_handler(event, context):
+    logger.info("Lambda Main Handler Event", extra={"event": event})
+
     try:
-        # Gather custom class and method handlers from input event
-        class_name = event.get("params", None).get("class_name")
-        method_name = event.get("params", None).get("method_name")
-        main_event = event.get("event", {})
-        main_event["ExceptionOcurred"] = False
-        logger.info("Lambda Main Handler Event")
-        logger.info(main_event)
+        class_name, method_name, inner_event = _extract_params_and_event(event)
+        clazz, _ = _resolve_target(class_name, method_name)
 
-        if class_name is not None and method_name is not None:
-            # Dynamically load and initialize the target class at runtime
-            target_class = globals()[class_name]
-            target_instance = target_class(main_event)
-            logger.debug(f"dynamically loaded target_instance: {target_instance}")
+        target_instance = clazz(inner_event)
+        logger.debug("Dynamically loaded target instance", extra={"class": class_name})
 
-            # Dynamically load and execute the method at runtime
-            target_method = getattr(target_instance, method_name)
-            logger.debug(f"dynamically loaded target_method: {target_method}")
-            return target_method()
-        else:
-            message = "class_name and method_name are not provided in event params"
-            logger.info(message)
-            return {"Message": message}
+        target_method = getattr(target_instance, method_name)
+        logger.debug(
+            "Dynamically resolved target method", extra={"method": method_name}
+        )
+
+        return target_method()
+
     except Exception as e:
-        logger.exception(f"Error while executing lambda handler: {e}")
-        logger.exception(f"Lambda Initial Event was: {event}")
-        logger.exception(f"Lambda Main Event was: {main_event}")
-        raise e
+        logger.error("Error while executing lambda handler", extra={"error": str(e)})
+        try:
+            logger.error("Lambda Initial Event (raw)", extra={"event": event})
+        except Exception:
+            logger.error("Lambda Initial Event (non-serializable)")
+
+        try:
+            _, _, inner_event = _extract_params_and_event(event or {})
+            logger.error("Lambda Main Event (inner)", extra={"event": inner_event})
+        except Exception:
+            logger.error("Lambda Main Event (non-serializable)")
+
+        logger.error(traceback.format_exc())
+        raise

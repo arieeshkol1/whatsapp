@@ -31,9 +31,7 @@ The processing of messages is powered by an AWS Step Function that has multiple 
 
 ## Results (WhatsApp Assistant Demo) 🔮
 
-<img src="assets/WhatsApp_Chatbot_Results_01.PNG" width=35%> <img src="assets/WhatsApp_Chatbot_Results_02.PNG" width=35%>
 
-<img src="assets/WhatsApp_Chatbot_Results_03.PNG" width=35%> <img src="assets/WhatsApp_Chatbot_Results_04.PNG" width=35%>
 
 ## Manual Steps (Only Once) :raised_hand:
 
@@ -57,12 +55,11 @@ Information about the Codex auto-approval workflow, why pull requests are still 
 
 Thanks for all the inspiration and guidance on the Generative AI journey:
 
-- [elizabethfuentes12](https://github.com/elizabethfuentes12) -> Gracias, Eli por inspirarme a ser un Developer Advocate!
-- [micheldirk](https://medium.com/@micheldirk) -> Thanks Michel for the inspiration for the low-level CDK constructs!
+
 
 ## Author 🎹
 
-### Santiago Garcia Arango
+### Ariel Eshkol
 
 <table border="1">
     <tr>
@@ -70,11 +67,11 @@ Thanks for all the inspiration and guidance on the Generative AI journey:
             <p align="center">Curious Solutions Architect experienced in DevOps and passionate about advanced cloud-based solutions and deployments in AWS. I am convinced that today's greatest challenges must be solved by people that love what they do.</p>
         </td>
         <td>
-            <p align="center"><img src="assets/SantiagoGarciaArango_AWS.png" width=80%></p>
+            <p align="center"><img src="assets/ArielEshkol_AWS.png" width=80%></p>
         </td>
     </tr>
 </table>
 
 ## LICENSE
 
-Copyright 2024 Santiago Garcia Arango.
+Copyright 2024 Ariel Eshkol.
