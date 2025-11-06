@@ -974,6 +974,11 @@ class ChatbotAPIStack(Stack):
         # # ... (manual for now when docs refreshed... could be automated)
 
         # Create the Bedrock Agent with KB and Agent Groups
+        foundation_model_identifier = (
+            self.bedrock_agent_inference_profile_arn
+            or self.bedrock_agent_foundation_model_id
+        )
+
         self.bedrock_agent = aws_bedrock.CfnAgent(
             self,
             "BedrockAgentV2",
@@ -1094,6 +1099,15 @@ class ChatbotAPIStack(Stack):
                 else None
             ),
         )
+
+        if self.bedrock_agent_inference_profile_arn:
+            # The CloudFormation property was introduced before CDK exposed a typed field.
+            # Manually override the synthesized template so Bedrock uses the required
+            # inference profile when invoking the foundation model.
+            self.bedrock_agent.add_override(
+                "Properties.InferenceProfileArn",
+                self.bedrock_agent_inference_profile_arn,
+            )
 
         # Create an alias for the bedrock agent
         cfn_agent_alias = aws_bedrock.CfnAgentAlias(

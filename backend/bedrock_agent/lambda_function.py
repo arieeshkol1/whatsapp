@@ -121,6 +121,8 @@ def action_group_create_bundles(parameters):
 
 
 def lambda_handler(event, context):
+    import json
+
     action_group = event["actionGroup"]
     _function = event["function"]
     parameters = event.get("parameters", [])
@@ -138,9 +140,16 @@ def lambda_handler(event, context):
     else:
         raise ValueError(f"Action Group <{action_group}> not supported.")
 
-    # Convert the list of events to a string to be able to return it in the response as a string
-    results_string = "\n-".join(results)
-    response_body = {"TEXT": {"body": results_string}}
+    # --- Build prompt to send to Bedrock ---
+    config_as_text = json.dumps(bedrock_config, indent=2, ensure_ascii=False)
+    user_message = "\n-".join(results)
+    full_prompt = f"Settings:\n{config_as_text}\n\nAnswer the following:\n{user_message}"
+
+    # --- Build response body ---
+    response_body = {
+        "TEXT": {"body": full_prompt},
+        "bedrock_config": bedrock_config  # included for downstream processing
+    }
 
     action_response = {
         "actionGroup": action_group,
@@ -152,6 +161,6 @@ def lambda_handler(event, context):
         "response": action_response,
         "messageVersion": event["messageVersion"],
     }
-    print("Response: {}".format(function_response))
 
+    print("Response: {}".format(function_response))
     return function_response
