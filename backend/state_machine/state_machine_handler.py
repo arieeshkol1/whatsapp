@@ -7,13 +7,14 @@ from common.logger import custom_logger
 
 logger = custom_logger()
 
+# Resolve to the backend.state_machine package to avoid collisions
 CLASS_MODULE_MAP = {
-    "SendMessage": "state_machine.processing.send_message",
-    "ProcessText": "state_machine.processing.process_text",
-    "ProcessVoice": "state_machine.processing.process_voice",
-    "ValidateMessage": "state_machine.processing.validate_message",
-    "Success": "state_machine.utils.success",
-    "Failure": "state_machine.utils.failure",
+    "SendMessage": "backend.state_machine.processing.send_message",
+    "ProcessText": "backend.state_machine.processing.process_text",
+    "ProcessVoice": "backend.state_machine.processing.process_voice",
+    "ValidateMessage": "backend.state_machine.processing.validate_message",
+    "Success": "backend.state_machine.utils.success",
+    "Failure": "backend.state_machine.utils.failure",
 }
 
 
@@ -52,8 +53,8 @@ def _resolve_target(class_name: str, method_name: str):
         snake_name = _camel_to_snake(class_name)
         candidate_modules.extend(
             (
-                f"state_machine.processing.{snake_name}",
-                f"state_machine.utils.{snake_name}",
+                f"backend.state_machine.processing.{snake_name}",
+                f"backend.state_machine.utils.{snake_name}",
             )
         )
 
@@ -95,7 +96,9 @@ def lambda_handler(event, context):
         logger.debug("Dynamically loaded target instance", extra={"class": class_name})
 
         target_method = getattr(target_instance, method_name)
-        logger.debug("Dynamically resolved target method", extra={"method": method_name})
+        logger.debug(
+            "Dynamically resolved target method", extra={"method": method_name}
+        )
 
         return target_method()
 
