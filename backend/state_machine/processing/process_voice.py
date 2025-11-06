@@ -1,6 +1,6 @@
-from state_machine.base_step_function import BaseStepFunction
+from ..base_step_function import BaseStepFunction
 from common.logger import custom_logger
-from state_machine.processing.bedrock_agent import call_bedrock_agent  # noqa: F401 (placeholder)
+from .bedrock_agent import call_bedrock_agent  # noqa: F401 (placeholder)
 
 logger = custom_logger()
 
