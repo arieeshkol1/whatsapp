@@ -241,7 +241,7 @@ class ChatbotAPIStack(Stack):
                 self.lambda_layer_common,
             ],
         )
-        
+
         # Grants & policies for the state-machine processor Lambda
         self.secret_chatbot.grant_read(self.lambda_state_machine_process_message)
         self.dynamodb_table.grant_read_write_data(
@@ -436,7 +436,7 @@ class ChatbotAPIStack(Stack):
         root_resource_docs_proxy.add_method("GET", api_lambda_integration_chatbot)
 
     def create_state_machine_tasks(self) -> None:
-        """ "
+        """
         Method to create the tasks for the Step Function State Machine.
         """
 
