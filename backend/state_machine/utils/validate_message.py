@@ -1,5 +1,5 @@
 # Local Imports
-from state_machine.base_step_function import BaseStepFunction
+from ..base_step_function import BaseStepFunction
 from common.enums import WhatsAppMessageTypes
 from common.logger import custom_logger
 
@@ -46,5 +46,8 @@ class ValidateMessage(BaseStepFunction):
         # Add relevant data fields for traceability in the next State Machine steps
         self.event["correlation_id"] = self.correlation_id
         self.event["message_type"] = self.message_type
+        # Flag that validation succeeded to keep downstream steps compatible with
+        # the original state machine contract.
+        self.event["ExceptionOcurred"] = False
 
         return self.event
