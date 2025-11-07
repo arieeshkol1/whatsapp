@@ -1,5 +1,5 @@
 # Local Imports
-from state_machine.base_step_function import BaseStepFunction
+from ..base_step_function import BaseStepFunction
 from common.enums import WhatsAppMessageTypes
 from common.logger import custom_logger
 
