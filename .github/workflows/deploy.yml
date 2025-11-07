@@ -81,6 +81,17 @@ jobs:
           mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
           df -h
 
+      - name: Setup Node (required for JSII)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Ensure JSII temp dir exists
+        run: |
+          mkdir -p "$RUNNER_TEMP" "$RUNNER_TEMP/jsii"
+          echo "JSII_TMPDIR=$RUNNER_TEMP/jsii" >> $GITHUB_ENV
+          ls -ld "$RUNNER_TEMP" "$RUNNER_TEMP/jsii"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
