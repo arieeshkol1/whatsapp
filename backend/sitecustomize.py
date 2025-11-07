@@ -24,9 +24,8 @@ from pathlib import Path
 # so we create a namespace module whose ``__path__`` points at the artifact
 # root.  That allows imports such as ``backend.state_machine`` to succeed even
 # though the files live directly under ``/var/task``.
-if (
-    importlib.util.find_spec("backend") is None
-):  # pragma: no cover - only true in Lambda
+# This branch only runs inside the packaged Lambda.
+if importlib.util.find_spec("backend") is None:  # pragma: no cover
     module = types.ModuleType("backend")
     module.__path__ = [str(Path(__file__).resolve().parent)]  # type: ignore[attr-defined]
     sys.modules["backend"] = module
