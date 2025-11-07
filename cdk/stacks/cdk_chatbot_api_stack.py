@@ -154,26 +154,11 @@ class ChatbotAPIStack(Stack):
         """
         Create the Lambda Functions for the solution.
         """
-        # Package from project root so the 'backend' package is preserved in the artifact
-        PROJECT_ROOT = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        # Package ONLY the backend/ folder so modules are importable by path handlers
+        PATH_TO_LAMBDA_FUNCTION_FOLDER = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "backend",
         )
-
-        # Exclude build, virtualenv, tests and other non-runtime directories
-        ASSET_EXCLUDE = [
-            "cdk.out",
-            ".git",
-            ".github",
-            ".venv",
-            "node_modules",
-            "lambda-layers",  # layers are packaged separately
-            "knowledge_base",  # not needed in function code bundles
-            "custom_resources",  # not needed in function code bundles
-            "tests",
-            "scripts",
-            "*.pyc",
-            "__pycache__",
-        ]
 
         rules_table_name = self.app_config.get("rules_table_name")
         rules_table = None
@@ -189,9 +174,9 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-WhatsApp-Webhook",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="backend.whatsapp_webhook.api.v1.main.handler",
+            handler="whatsapp_webhook/api/v1/main.handler",
             function_name=f"{self.main_resources_name}-input",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
             timeout=Duration.seconds(20),
             memory_size=512,
             environment={
@@ -214,9 +199,9 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-Trigger-Message-Processing",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="backend.trigger.trigger_handler.lambda_handler",
+            handler="trigger/trigger_handler.lambda_handler",
             function_name=f"{self.main_resources_name}-trigger-state-machine",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
             timeout=Duration.seconds(20),
             memory_size=512,
             environment={
@@ -245,9 +230,9 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-SM-Process-Message",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="backend.state_machine.state_machine_handler.lambda_handler",
+            handler="state_machine/state_machine_handler.lambda_handler",
             function_name=f"{self.main_resources_name}-state-machine-lambda",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
             timeout=Duration.seconds(60),
             memory_size=512,
             environment=state_machine_environment,
@@ -308,9 +293,9 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-AG-Generic",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="backend.bedrock_agent.lambda_function.lambda_handler",
+            handler="bedrock_agent/lambda_function.lambda_handler",
             function_name=f"{self.main_resources_name}-bedrock-action-groups",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
             timeout=Duration.seconds(60),
             memory_size=512,
             environment={
@@ -681,7 +666,6 @@ class ChatbotAPIStack(Stack):
         # TODO: refactor this huge function into independent methods... and eventually custom constructs!
 
         # Get relative path for folder that contains the kb assets
-        # ! Note--> we must obtain parent dirs to create path (that"s why there is "os.path.dirname()")
         PATH_TO_KB_FOLDER = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "knowledge_base",
@@ -728,7 +712,7 @@ class ChatbotAPIStack(Stack):
         else:
             self.rules_dynamodb_table = None
 
-        # Add permissions to the Lambda function resource policy. You use a resource-based policy to allow an AWS service to invoke your function.
+        # Add permissions to the Lambda function resource policy.
         self.lambda_action_groups.add_permission(
             "AllowBedrock",
             principal=aws_iam.ServicePrincipal("bedrock.amazonaws.com"),
@@ -792,7 +776,7 @@ class ChatbotAPIStack(Stack):
                 destination_key_prefix="docs/",
             )
 
-            # Create opensearch serverless collection requires a security policy of type encryption. The policy must be a string and the resource contains the collections it is applied to.
+            # Encryption policy for the OpenSearch Serverless collection
             opensearch_serverless_encryption_policy = oss.CfnSecurityPolicy(
                 self,
                 "OpenSearchServerlessEncryptionPolicy",
@@ -802,7 +786,7 @@ class ChatbotAPIStack(Stack):
                 description="Encryption policy for the opensearch serverless collection",
             )
 
-            # We also need a security policy of type network so that the collection becomes accessable. The policy must be a string and the resource contains the collections it is applied to.
+            # Network policy for the OpenSearch Serverless collection
             opensearch_serverless_network_policy = oss.CfnSecurityPolicy(
                 self,
                 "OpenSearchServerlessNetworkPolicy",
@@ -848,19 +832,16 @@ class ChatbotAPIStack(Stack):
                     aws_iam.ManagedPolicy.from_aws_managed_policy_name(
                         "CloudWatchLogsFullAccess"
                     ),
-                    # TROUBLESHOOTING: Add additional permissions for the KB
+                    # TODO: REMOVE in production
                     aws_iam.ManagedPolicy.from_aws_managed_policy_name(
                         "AdministratorAccess"
-                    ),  # TODO: DELETE THIS LINE IN PRODUCTION
+                    ),
                 ],
             )
 
-            # Create a Custom Resource for the OpenSearch Index (not supported by CDK yet)
-            # TODO: Replace to L1 or L2 construct when available!!!!!!
-            # Define the index name
+            # Create a Custom Resource for the OpenSearch Index
             index_name = "kb-docs"
 
-            # Define the Lambda function that creates a new index in the opensearch serverless collection
             create_index_lambda = aws_lambda.Function(
                 self,
                 "Index",
@@ -873,10 +854,9 @@ class ChatbotAPIStack(Stack):
                     "INDEX_NAME": index_name,
                     "REGION": self.region,
                 },
-                layers=[self.lambda_layer_common],  # To add requests library
+                layers=[self.lambda_layer_common],
             )
 
-            # Define IAM permission policy for the Lambda function. This function calls the OpenSearch Serverless API to create a new index in the collection and must have the "aoss" permissions.
             create_index_lambda.role.add_to_principal_policy(
                 aws_iam.PolicyStatement(
                     effect=aws_iam.Effect.ALLOW,
@@ -893,7 +873,6 @@ class ChatbotAPIStack(Stack):
                 )
             )
 
-            # Finally we can create a complete data access policy for the collection that also includes the lambda function that will create the index. The policy must be a string and the resource contains the collections it is applied to.
             opensearch_serverless_access_policy = oss.CfnAccessPolicy(
                 self,
                 "OpenSearchServerlessAccessPolicy",
@@ -903,18 +882,15 @@ class ChatbotAPIStack(Stack):
                 description="Data access policy for the opensearch serverless collection",
             )
 
-            # Add dependencies to the collection
             opensearch_serverless_collection.add_dependency(
                 opensearch_serverless_access_policy
             )
 
-            # Define the request body for the lambda invoke api call that the custom resource will use
             aossLambdaParams = {
                 "FunctionName": create_index_lambda.function_name,
                 "InvocationType": "RequestResponse",
             }
 
-            # On creation of the stack, trigger the Lambda function we just defined
             trigger_lambda_cr = cr.AwsCustomResource(
                 self,
                 "IndexCreateCustomResource",
@@ -931,7 +907,6 @@ class ChatbotAPIStack(Stack):
                 timeout=Duration.seconds(300),
             )
 
-            # Define IAM permission policy for the custom resource
             trigger_lambda_cr.grant_principal.add_to_principal_policy(
                 aws_iam.PolicyStatement(
                     effect=aws_iam.Effect.ALLOW,
@@ -940,11 +915,9 @@ class ChatbotAPIStack(Stack):
                 )
             )
 
-            # Only trigger the custom resource after the opensearch access policy has been applied to the collection
             trigger_lambda_cr.node.add_dependency(opensearch_serverless_access_policy)
             trigger_lambda_cr.node.add_dependency(opensearch_serverless_collection)
 
-            # Create the Bedrock KB
             bedrock_knowledge_base = aws_bedrock.CfnKnowledgeBase(
                 self,
                 "BedrockKB",
@@ -963,19 +936,17 @@ class ChatbotAPIStack(Stack):
                         collection_arn=opensearch_serverless_collection.attr_arn,
                         vector_index_name=index_name,
                         field_mapping=aws_bedrock.CfnKnowledgeBase.OpenSearchServerlessFieldMappingProperty(
-                            metadata_field="AMAZON_BEDROCK_METADATA",  # Must match to Lambda Function
-                            text_field="AMAZON_BEDROCK_TEXT_CHUNK",  # Must match to Lambda Function
-                            vector_field="bedrock-knowledge-base-default-vector",  # Must match to Lambda Function
+                            metadata_field="AMAZON_BEDROCK_METADATA",
+                            text_field="AMAZON_BEDROCK_TEXT_CHUNK",
+                            vector_field="bedrock-knowledge-base-default-vector",
                         ),
                     ),
                 ),
             )
 
-            # Add dependencies to the KB
             bedrock_knowledge_base.add_dependency(opensearch_serverless_collection)
             bedrock_knowledge_base.node.add_dependency(trigger_lambda_cr)
 
-            # Create the datasource for the bedrock KB
             bedrock_data_source = aws_bedrock.CfnDataSource(
                 self,
                 "Bedrock-DataSource",
@@ -998,11 +969,7 @@ class ChatbotAPIStack(Stack):
                     )
                 ),
             )
-            # Only trigger the custom resource when the kb is completed
             bedrock_data_source.node.add_dependency(bedrock_knowledge_base)
-
-        # # TODO: Add the automation for the KB ingestion
-        # # ... (manual for now when docs refreshed... could be automated)
 
         # Create the Bedrock Agent with KB and Agent Groups
         foundation_model_identifier = (
@@ -1016,7 +983,6 @@ class ChatbotAPIStack(Stack):
             agent_name=f"{self.main_resources_name}-havitush-agent",
             agent_resource_role_arn=bedrock_agent_role.role_arn,
             description="Conversational agent for the Havitush online drinks store.",
-            # Amazon Nova Lite model configured for fast, high-quality responses.
             foundation_model=self.bedrock_agent_effective_foundation_model_id,
             instruction="""
 אתה "חביתוש – הסוכן הדיגיטלי להזמנות בירה טרייה מהחבית". דבר תמיד בעברית חמה ומזמינה וסייע ללקוחות להזמין שירותים או חבילות בהתאם לכללים הבאים:
@@ -1132,15 +1098,11 @@ class ChatbotAPIStack(Stack):
         )
 
         if self.bedrock_agent_inference_profile_arn:
-            # The CloudFormation property was introduced before CDK exposed a typed field.
-            # Manually override the synthesized template so Bedrock uses the required
-            # inference profile when invoking the foundation model.
             self.bedrock_agent.add_override(
                 "Properties.InferenceProfileArn",
                 self.bedrock_agent_inference_profile_arn,
             )
 
-        # Create an alias for the bedrock agent
         cfn_agent_alias = aws_bedrock.CfnAgentAlias(
             self,
             "MyCfnAgentAlias",
@@ -1150,11 +1112,10 @@ class ChatbotAPIStack(Stack):
         )
         cfn_agent_alias.add_dependency(self.bedrock_agent)
 
-        # This string will be as <AGENT_ID>|<AGENT_ALIAS_ID>
+        # <AGENT_ID>|<AGENT_ALIAS_ID>
         agent_alias_string = cfn_agent_alias.ref
 
-        # Create SSM Parameters for the agent alias to use in the Lambda functions
-        # Note: can not be added as Env-Vars due to circular dependency. Thus, SSM Params (decouple)
+        # SSM Parameters for the agent/alias
         aws_ssm.StringParameter(
             self,
             "SSMAgentAlias",
