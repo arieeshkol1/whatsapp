@@ -18,6 +18,8 @@ env:
   AWS_DEFAULT_OUTPUT: json
   # IMPORTANT FOR THE CDK DEPLOYMENT ENV
   DEPLOYMENT_ENVIRONMENT: ${{ github.event.inputs.environment }}
+  # Avoid CLI version checks to save time
+  CDK_DISABLE_VERSION_CHECK: "true"
 
 jobs:
   code-quality:
@@ -178,15 +180,50 @@ jobs:
       - name: Who am I (debug)
         run: aws sts get-caller-identity
 
+      # >>> Disk cleanup to recover GBs before synth
+      - name: Free disk space (before CDK synth)
+        shell: bash
+        run: |
+          echo "Disk usage before cleanup:"
+          df -h
+
+          echo "Prune Docker images/containers/volumes"
+          docker system prune -af || true
+          docker volume prune -f || true
+
+          echo "Clean apt caches"
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+          echo "Remove SDKs you don't use"
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android
+
+          echo "Clear Python caches"
+          poetry cache clear --all pypi || true
+          pip cache purge || true
+
+          echo "Clear Node/Yarn caches (if present)"
+          npm cache clean --force || true
+          yarn cache clean || true
+
+          echo "Delete repo build artifacts and caches"
+          rm -rf cdk.out .pytest_cache .mypy_cache **/__pycache__ .ruff_cache .coverage .tox
+
+          echo "Disk usage after cleanup:"
+          df -h
+      # <<<
+
       - name: CDK Synth
         run: |
           source .venv/bin/activate
-          cdk synth
+          cdk synth --no-staging
 
       - name: CDK Diff
         run: |
           source .venv/bin/activate
-          cdk diff
+          cdk diff --no-staging
 
       - name: Archive CDK Synth results (no assets)
         uses: actions/upload-artifact@v4
@@ -296,7 +333,24 @@ jobs:
       - name: Who am I (debug)
         run: aws sts get-caller-identity
 
+      # Same cleanup pre-deploy (deploy internally synthesizes again)
+      - name: Free disk space (before CDK deploy)
+        shell: bash
+        run: |
+          df -h
+          docker system prune -af || true
+          docker volume prune -f || true
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+          poetry cache clear --all pypi || true
+          pip cache purge || true
+          npm cache clean --force || true
+          yarn cache clean || true
+          rm -rf cdk.out .pytest_cache .mypy_cache **/__pycache__ .ruff_cache .coverage .tox
+          df -h
+
       - name: CDK Deploy
         run: |
           source .venv/bin/activate
-          cdk deploy --require-approval never
+          cdk deploy --no-staging --require-approval never
