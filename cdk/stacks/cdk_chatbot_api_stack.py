@@ -1,4 +1,4 @@
-# Built-in imports
+    # Built-in imports
 import os
 from typing import Any, Dict, Optional
 
@@ -166,14 +166,15 @@ class ChatbotAPIStack(Stack):
             ".github",
             ".venv",
             "node_modules",
-            "lambda-layers",    # layers are packaged separately
-            "knowledge_base",   # not needed in function code bundles
-            "custom_resources", # not needed in function code bundles
+            "lambda-layers",  # layers are packaged separately
+            "knowledge_base",  # not needed in function code bundles
+            "custom_resources",  # not needed in function code bundles
             "tests",
             "scripts",
             "*.pyc",
             "__pycache__",
         ]
+
 
         rules_table_name = self.app_config.get("rules_table_name")
         rules_table = None
