@@ -248,9 +248,7 @@ class ChatbotAPIStack(Stack):
             self.lambda_state_machine_process_message
         )
         if rules_table is not None:
-            rules_table.grant_read_write_data(
-                self.lambda_state_machine_process_message
-            )
+            rules_table.grant_read_write_data(self.lambda_state_machine_process_message)
 
         role = self.lambda_state_machine_process_message.role
         role.add_managed_policy(
