@@ -95,15 +95,19 @@ class ChatbotAPIStack(Stack):
         self.generate_cloudformation_outputs()
 
     def import_secrets(self) -> None:
-        """Import the AWS Secret for the Lambda functions."""
+        """
+        Method to import the AWS Secrets for the Lambda Functions.
+        """
         self.secret_chatbot = aws_secretsmanager.Secret.from_secret_name_v2(
             self,
             "Secret-Chatbot",
             secret_name=self.app_config["secret_name"],
         )
 
-    def create_dynamodb_table(self) -> None:
-        """Create DynamoDB table for storing the conversations."""
+    def create_dynamodb_table(self):
+        """
+        Create DynamoDB table for storing the conversations.
+        """
         self.dynamodb_table = aws_dynamodb.Table(
             self,
             "DynamoDB-Table-Chatbot",
@@ -123,45 +127,39 @@ class ChatbotAPIStack(Stack):
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
 
     def create_lambda_layers(self) -> None:
-        """Create the Lambda layers for additional runtime dependencies."""
+        """
+        Create the Lambda layers that are necessary for the additional runtime
+        dependencies of the Lambda Functions.
+        """
+
+        # Layer for "LambdaPowerTools" (for logging, traces, observability, etc)
         self.lambda_layer_powertools = aws_lambda.LayerVersion.from_layer_version_arn(
             self,
             "Layer-PowerTools",
             layer_version_arn=f"arn:aws:lambda:{self.region}:017000801446:layer:AWSLambdaPowertoolsPythonV2:71",
         )
 
+        # Layer for "common" Python requirements (fastapi, mangum, pydantic, ...)
         self.lambda_layer_common = aws_lambda.LayerVersion(
             self,
             "Layer-Common",
             code=aws_lambda.Code.from_asset("lambda-layers/common/modules"),
-            compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_11],
+            compatible_runtimes=[
+                aws_lambda.Runtime.PYTHON_3_11,
+            ],
             description="Lambda Layer for Python with <common> library",
             removal_policy=RemovalPolicy.DESTROY,
             compatible_architectures=[aws_lambda.Architecture.X86_64],
         )
 
     def create_lambda_functions(self) -> None:
-        """Create the Lambda Functions for the solution."""
-        # Package from project root so the 'backend' package is preserved in the artifact
+        """
+        Create the Lambda Functions for the solution.
+        """
+        # Get project root path so the packaged artifact includes the backend package
         PROJECT_ROOT = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         )
-
-        # Exclude non-runtime content to keep artifact small and avoid ENOSPC
-        ASSET_EXCLUDE = [
-            "cdk.out",
-            ".git",
-            ".github",
-            ".venv",
-            "node_modules",
-            "lambda-layers",  # layers are packaged separately
-            "knowledge_base",  # not needed in function code bundles
-            "custom_resources",  # not needed in function code bundles
-            "tests",
-            "scripts",
-            "*.pyc",
-            "__pycache__",
-        ]
 
         rules_table_name = self.app_config.get("rules_table_name")
         rules_table = None
@@ -172,14 +170,14 @@ class ChatbotAPIStack(Stack):
                 table_name=rules_table_name,
             )
 
-        # Lambda: WhatsApp webhook (Meta callback)
+        # Lambda Function for WhatsApp input messages (Meta WebHook)
         self.lambda_whatsapp_webhook = aws_lambda.Function(
             self,
             "Lambda-WhatsApp-Webhook",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
             handler="backend.whatsapp_webhook.api.v1.main.handler",
             function_name=f"{self.main_resources_name}-input",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(20),
             memory_size=512,
             environment={
@@ -188,30 +186,37 @@ class ChatbotAPIStack(Stack):
                 "DYNAMODB_TABLE": self.dynamodb_table.table_name,
                 "SECRET_NAME": self.app_config["secret_name"],
             },
-            layers=[self.lambda_layer_powertools, self.lambda_layer_common],
+            layers=[
+                self.lambda_layer_powertools,
+                self.lambda_layer_common,
+            ],
         )
         self.dynamodb_table.grant_read_write_data(self.lambda_whatsapp_webhook)
         self.secret_chatbot.grant_read(self.lambda_whatsapp_webhook)
 
-        # Lambda: Trigger state machine from DynamoDB Streams
+        # Lambda Function for receiving the messages from DynamoDB Streams
+        # ... and triggering the State Machine for processing the messages
         self.lambda_trigger_state_machine = aws_lambda.Function(
             self,
             "Lambda-Trigger-Message-Processing",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
             handler="backend.trigger.trigger_handler.lambda_handler",
             function_name=f"{self.main_resources_name}-trigger-state-machine",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(20),
             memory_size=512,
             environment={
                 "ENVIRONMENT": self.app_config["deployment_environment"],
                 "LOG_LEVEL": self.app_config["log_level"],
             },
-            layers=[self.lambda_layer_powertools, self.lambda_layer_common],
+            layers=[
+                self.lambda_layer_powertools,
+                self.lambda_layer_common,
+            ],
         )
 
-        # Lambda: State machine step runner
-        state_machine_environment: Dict[str, str] = {
+        # Lambda Function that will run the State Machine steps for processing the messages
+        state_machine_environment = {
             "ENVIRONMENT": self.app_config["deployment_environment"],
             "LOG_LEVEL": self.app_config["log_level"],
             "SECRET_NAME": self.app_config["secret_name"],
@@ -227,23 +232,32 @@ class ChatbotAPIStack(Stack):
             runtime=aws_lambda.Runtime.PYTHON_3_11,
             handler="backend.state_machine.state_machine_handler.lambda_handler",
             function_name=f"{self.main_resources_name}-state-machine-lambda",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(60),
             memory_size=512,
             environment=state_machine_environment,
-            layers=[self.lambda_layer_powertools, self.lambda_layer_common],
+            layers=[
+                self.lambda_layer_powertools,
+                self.lambda_layer_common,
+            ],
         )
         self.secret_chatbot.grant_read(self.lambda_state_machine_process_message)
         self.dynamodb_table.grant_read_write_data(
             self.lambda_state_machine_process_message
         )
         if rules_table is not None:
-            rules_table.grant_read_write_data(self.lambda_state_machine_process_message)
+            rules_table.grant_read_write_data(
+                self.lambda_state_machine_process_message
+            )
         self.lambda_state_machine_process_message.role.add_managed_policy(
-            aws_iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMReadOnlyAccess")
+            aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                "AmazonSSMReadOnlyAccess"
+            )
         )
         self.lambda_state_machine_process_message.role.add_managed_policy(
-            aws_iam.ManagedPolicy.from_aws_managed_policy_name("AmazonBedrockFullAccess")
+            aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                "AmazonBedrockFullAccess"
+            )
         )
         self.lambda_state_machine_process_message.role.add_to_policy(
             aws_iam.PolicyStatement(
@@ -256,7 +270,7 @@ class ChatbotAPIStack(Stack):
             )
         )
 
-        # Lambda: Bedrock Agent action groups
+        # Lambda Function for the Bedrock Agent Group (fetch recipes)
         bedrock_agent_lambda_role = aws_iam.Role(
             self,
             "BedrockAgentLambdaRole",
@@ -275,13 +289,15 @@ class ChatbotAPIStack(Stack):
             ],
         )
 
+        # Lambda for the Action Group (used for Bedrock Agents)
+        # Note: Single Lambda for all Action Groups for now...
         self.lambda_action_groups = aws_lambda.Function(
             self,
             "Lambda-AG-Generic",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
             handler="backend.bedrock_agent.lambda_function.lambda_handler",
             function_name=f"{self.main_resources_name}-bedrock-action-groups",
-            code=aws_lambda.Code.from_asset(PROJECT_ROOT, exclude=ASSET_EXCLUDE),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(60),
             memory_size=512,
             environment={
@@ -294,6 +310,7 @@ class ChatbotAPIStack(Stack):
 
     def _build_state_machine_lambda_environment(self) -> Dict[str, str]:
         """Compose environment variables for the state machine processor Lambda."""
+
         base_environment: Dict[str, str] = {
             "ENVIRONMENT": self.app_config["deployment_environment"],
             "LOG_LEVEL": self.app_config["log_level"],
@@ -307,6 +324,7 @@ class ChatbotAPIStack(Stack):
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
         }
+
         for key, value in optional_values.items():
             if value:
                 base_environment[key] = value
@@ -316,6 +334,7 @@ class ChatbotAPIStack(Stack):
             "RULESET_ID": self.app_config.get("ruleset_id"),
             "RULESET_VERSION": self.app_config.get("ruleset_version"),
         }
+
         for key, value in optional_rules_environment.items():
             if value:
                 base_environment[key] = value
@@ -323,7 +342,12 @@ class ChatbotAPIStack(Stack):
         return base_environment
 
     def create_dynamodb_streams(self) -> None:
-        """Wire DynamoDB Streams to the trigger Lambda."""
+        """
+        Method to create the DynamoDB Streams for the Lambda Function that will
+        process the incoming messages and trigger the State Machine.
+        """
+
+        # Stream the DynamoDB Events to the Lambda Function for processing
         self.lambda_trigger_state_machine.add_event_source(
             aws_lambda_event_sources.DynamoEventSource(
                 self.dynamodb_table,
@@ -332,21 +356,29 @@ class ChatbotAPIStack(Stack):
             )
         )
 
-    def create_rest_api(self) -> None:
-        """Create the REST API Gateway fronting the webhook Lambda."""
+    def create_rest_api(self):
+        """
+        Method to create the REST-API Gateway for exposing the chatbot
+        functionalities.
+        """
+
+        # API Method Options for the REST-API Gateway
+        # TODO: Currently public, as validation happens in the Lambda Function for now
         self.api_method_options_public = aws_apigw.MethodOptions(
             api_key_required=False,
             authorization_type=aws_apigw.AuthorizationType.NONE,
         )
 
+        # TODO: Add domain_name with custom DNS
+        # TODO: Enable custom models and schema validations
         rest_api_name = self.app_config["api_gw_name"]
         self.api = aws_apigw.LambdaRestApi(
             self,
             "RESTAPI",
             rest_api_name=rest_api_name,
             description=(
-                f"REST API Gateway for {self.main_resources_name} in "
-                f"{self.deployment_environment} environment"
+                f"REST API Gateway for {self.main_resources_name} in"
+                f" {self.deployment_environment} environment"
             ),
             handler=self.lambda_whatsapp_webhook,
             deploy_options=aws_apigw.StageOptions(
@@ -365,36 +397,45 @@ class ChatbotAPIStack(Stack):
             proxy=False,  # Proxy disabled to have more control
         )
 
-        # Remove "Endpoint" CFN output generated by the L2
+        # Method to remove the "CloudFormation Output" to avoid exposing the endpoint
         self.api.node.try_remove_child("Endpoint")
 
-    def configure_rest_api(self) -> None:
-        """Attach resources and methods to the REST API."""
+    def configure_rest_api(self):
+        """
+        Method to configure the REST-API Gateway with resources and methods.
+        """
+
+        # Define REST-API resources
         root_resource_api = self.api.root.add_resource("api")
         root_resource_v1 = root_resource_api.add_resource("v1")
 
-        # Docs (served by Lambda)
+        # Endpoints for automatic Swagger docs (no auth required)
         root_resource_docs = root_resource_v1.add_resource("docs")
         root_resource_docs_proxy = root_resource_docs.add_resource("{path}")
 
-        # Webhook
+        # Endpoints for the main functionalities
         root_resource_chatbot = root_resource_v1.add_resource("webhook")
+
+        # Define all API-Lambda integrations for the API methods
         api_lambda_integration_chatbot = aws_apigw.LambdaIntegration(
             self.lambda_whatsapp_webhook
         )
 
-        # /api/v1/webhook
+        # API-Path: "/api/v1/webhook"
         root_resource_chatbot.add_method("GET", api_lambda_integration_chatbot)
         root_resource_chatbot.add_method("POST", api_lambda_integration_chatbot)
 
-        # /api/v1/docs
+        # API-Path: "/api/v1/docs"
         root_resource_docs.add_method("GET", api_lambda_integration_chatbot)
 
-        # /api/v1/docs/openapi.json
+        # API-Path: "/api/v1/docs/openapi.json
         root_resource_docs_proxy.add_method("GET", api_lambda_integration_chatbot)
 
     def create_state_machine_tasks(self) -> None:
-        """Create the tasks for the Step Function State Machine."""
+        """ "
+        Method to create the tasks for the Step Function State Machine.
+        """
+
         self.task_validate_message = aws_sfn_tasks.LambdaInvoke(
             self,
             "Task-ValidateMessage",
@@ -412,24 +453,28 @@ class ChatbotAPIStack(Stack):
             output_path="$.Payload",
         )
 
+        # Pass States to simplify State Machine UI understanding
         self.task_pass_text = aws_sfn.Pass(
             self,
             "Task-Text",
             comment="Indicates that the message type is Text",
             state_name="Text",
         )
+
         self.task_pass_voice = aws_sfn.Pass(
             self,
             "Task-Voice",
             comment="Indicates that the message type is Voice",
             state_name="Voice",
         )
+
         self.task_pass_image = aws_sfn.Pass(
             self,
             "Task-Image",
             comment="Indicates that the message type is Image",
             state_name="Image",
         )
+
         self.task_pass_video = aws_sfn.Pass(
             self,
             "Task-Video",
@@ -533,6 +578,7 @@ class ChatbotAPIStack(Stack):
             id="Succeed",
             comment="Successful execution of State Machine",
         )
+
         self.task_failure = aws_sfn.Fail(
             self,
             id="Exception Handling Finished",
@@ -540,12 +586,17 @@ class ChatbotAPIStack(Stack):
         )
 
     def create_state_machine_definition(self) -> None:
-        """Create the Step Function State Machine definition."""
+        """
+        Method to create the Step Function State Machine definition.
+        """
+
+        # Conditions to simplify Choices in the State Machine
         self.choice_text = aws_sfn.Condition.string_equals("$.message_type", "text")
         self.choice_image = aws_sfn.Condition.string_equals("$.message_type", "image")
         self.choice_video = aws_sfn.Condition.string_equals("$.message_type", "video")
         self.choice_voice = aws_sfn.Condition.string_equals("$.message_type", "voice")
 
+        # State Machine event type initial configuration entrypoints
         self.state_machine_definition = self.task_validate_message.next(
             aws_sfn.Choice(self, "Message Type?")
             .when(self.choice_text, self.task_pass_text)
@@ -554,6 +605,7 @@ class ChatbotAPIStack(Stack):
             .when(self.choice_video, self.task_pass_video)
         )
 
+        # Pass States entrypoints
         self.task_pass_text.next(self.task_process_text.next(self.task_send_message))
         self.task_pass_voice.next(self.task_process_voice.next(self.task_pass_text))
         self.task_pass_image.next(self.task_not_implemented)
@@ -562,10 +614,15 @@ class ChatbotAPIStack(Stack):
         self.task_not_implemented.next(self.task_send_message)
         self.task_send_message.next(self.task_process_success)
         self.task_process_success.next(self.task_success)
-        # self.task_process_failure.next(self.task_failure)  # optional failure branch
+
+        # TODO: Add failure handling for the State Machine with "process_failure"
+        # self.task_process_failure.next(self.task_failure)
 
     def create_state_machine(self) -> None:
-        """Create the Step Function State Machine and logging."""
+        """
+        Method to create the Step Function State Machine for processing the messages.
+        """
+
         log_group_name = f"/aws/vendedlogs/states/{self.main_resources_name}"
         self.state_machine_log_group = aws_logs.LogGroup(
             self,
@@ -591,13 +648,20 @@ class ChatbotAPIStack(Stack):
         )
 
         self.state_machine.grant_start_execution(self.lambda_trigger_state_machine)
+
+        # Add additional environment variables to the Lambda Functions
         self.lambda_trigger_state_machine.add_environment(
             "STATE_MACHINE_ARN",
             self.state_machine.state_machine_arn,
         )
 
     def create_bedrock_components(self) -> None:
-        """Create the Bedrock Agent (and optional KB)."""
+        """
+        Method to create the Bedrock Agent for the chatbot.
+        """
+        # TODO: refactor this huge function into independent methods... and eventually custom constructs!
+
+        # Get relative path for folder that contains the kb assets
         PATH_TO_KB_FOLDER = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "knowledge_base",
@@ -607,21 +671,25 @@ class ChatbotAPIStack(Stack):
             "custom_resources",
         )
 
+        # Generic "PK" and "SK", to leverage Single-Table-Design
         self.agents_data_dynamodb_table = aws_dynamodb.Table(
             self,
             "DynamoDB-Table-AgentsData",
             table_name=self.app_config["agents_data_table_name"],
             partition_key=aws_dynamodb.Attribute(
-                name="PK", type=aws_dynamodb.AttributeType.STRING
+                name="PK",
+                type=aws_dynamodb.AttributeType.STRING,
             ),
             sort_key=aws_dynamodb.Attribute(
-                name="SK", type=aws_dynamodb.AttributeType.STRING
+                name="SK",
+                type=aws_dynamodb.AttributeType.STRING,
             ),
             billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.DESTROY,
         )
         Tags.of(self.agents_data_dynamodb_table).add(
-            "Name", self.app_config["agents_data_table_name"]
+            "Name",
+            self.app_config["agents_data_table_name"],
         )
 
         rules_table_name = self.app_config.get("rules_table_name")
@@ -631,10 +699,12 @@ class ChatbotAPIStack(Stack):
                 "DynamoDB-Table-Rules",
                 table_name=rules_table_name,
                 partition_key=aws_dynamodb.Attribute(
-                    name="PK", type=aws_dynamodb.AttributeType.STRING
+                    name="PK",
+                    type=aws_dynamodb.AttributeType.STRING,
                 ),
                 sort_key=aws_dynamodb.Attribute(
-                    name="SK", type=aws_dynamodb.AttributeType.STRING
+                    name="SK",
+                    type=aws_dynamodb.AttributeType.STRING,
                 ),
                 billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
                 removal_policy=RemovalPolicy.DESTROY,
@@ -643,6 +713,7 @@ class ChatbotAPIStack(Stack):
         else:
             self.rules_dynamodb_table = None
 
+        # Add permissions to the Lambda function resource policy
         self.lambda_action_groups.add_permission(
             "AllowBedrock",
             principal=aws_iam.ServicePrincipal("bedrock.amazonaws.com"),
@@ -667,6 +738,7 @@ class ChatbotAPIStack(Stack):
                 ),
             ],
         )
+        # Add additional IAM actions for the bedrock agent
         bedrock_agent_role.add_to_policy(
             aws_iam.PolicyStatement(
                 effect=aws_iam.Effect.ALLOW,
@@ -680,6 +752,7 @@ class ChatbotAPIStack(Stack):
             )
         )
 
+        # Create the S3 bucket for uploading the KB assets
         if self.enable_rag:
             s3_bucket_kb = aws_s3.Bucket(
                 self,
@@ -695,6 +768,7 @@ class ChatbotAPIStack(Stack):
                 aws_iam.ServicePrincipal("bedrock.amazonaws.com")
             )
 
+            # Upload assets to S3 bucket KB at deployment time
             s3d.BucketDeployment(
                 self,
                 "S3Upload-KB",
@@ -703,22 +777,35 @@ class ChatbotAPIStack(Stack):
                 destination_key_prefix="docs/",
             )
 
+            # Encryption policy
             opensearch_serverless_encryption_policy = oss.CfnSecurityPolicy(
                 self,
                 "OpenSearchServerlessEncryptionPolicy",
                 name="encryption-policy",
-                policy='{"Rules":[{"ResourceType":"collection","Resource":["collection/*"]}],"AWSOwnedKey":true}',
+                policy=(
+                    '{"Rules":[{"ResourceType":"collection",'
+                    '"Resource":["collection/*"]}],"AWSOwnedKey":true}'
+                ),
                 type="encryption",
                 description="Encryption policy for the opensearch serverless collection",
             )
+
+            # Network policy
             opensearch_serverless_network_policy = oss.CfnSecurityPolicy(
                 self,
                 "OpenSearchServerlessNetworkPolicy",
                 name="network-policy",
-                policy='[{"Description":"Public access for collection","Rules":[{"ResourceType":"dashboard","Resource":["collection/*"]},{"ResourceType":"collection","Resource":["collection/*"]}],"AllowFromPublic":true}]',
+                policy=(
+                    '[{"Description":"Public access for collection","Rules":'
+                    '[{"ResourceType":"dashboard","Resource":["collection/*"]},'
+                    '{"ResourceType":"collection","Resource":["collection/*"]}],'
+                    '"AllowFromPublic":true}]'
+                ),
                 type="network",
                 description="Network policy for the opensearch serverless collection",
             )
+
+            # Create the OpenSearch Collection
             opensearch_serverless_collection = oss.CfnCollection(
                 self,
                 "OpenSearchCollection-KB ",
@@ -727,6 +814,7 @@ class ChatbotAPIStack(Stack):
                 standby_replicas="DISABLED",
                 type="VECTORSEARCH",
             )
+
             opensearch_serverless_collection.add_dependency(
                 opensearch_serverless_encryption_policy
             )
@@ -734,6 +822,7 @@ class ChatbotAPIStack(Stack):
                 opensearch_serverless_network_policy
             )
 
+            # Role for the Bedrock KB
             bedrock_kb_role = aws_iam.Role(
                 self,
                 "IAMRole-BedrockKB",
@@ -752,12 +841,15 @@ class ChatbotAPIStack(Stack):
                     aws_iam.ManagedPolicy.from_aws_managed_policy_name(
                         "CloudWatchLogsFullAccess"
                     ),
-                    # TODO: Remove in production
+                    # TROUBLESHOOTING: Add additional permissions for the KB
                     aws_iam.ManagedPolicy.from_aws_managed_policy_name(
                         "AdministratorAccess"
-                    ),
+                    ),  # TODO: DELETE THIS LINE IN PRODUCTION
                 ],
             )
+
+            # Custom Resource to create index (OpenSearch Serverless)
+            index_name = "kb-docs"
 
             create_index_lambda = aws_lambda.Function(
                 self,
@@ -768,11 +860,12 @@ class ChatbotAPIStack(Stack):
                 timeout=Duration.seconds(300),
                 environment={
                     "COLLECTION_ENDPOINT": opensearch_serverless_collection.attr_collection_endpoint,
-                    "INDEX_NAME": "kb-docs",
+                    "INDEX_NAME": index_name,
                     "REGION": self.region,
                 },
-                layers=[self.lambda_layer_common],
+                layers=[self.lambda_layer_common],  # To add requests library
             )
+
             create_index_lambda.role.add_to_principal_policy(
                 aws_iam.PolicyStatement(
                     effect=aws_iam.Effect.ALLOW,
@@ -794,18 +887,24 @@ class ChatbotAPIStack(Stack):
                 "OpenSearchServerlessAccessPolicy",
                 name=f"{self.main_resources_name}-data-access-policy",
                 policy=(
-                    f'[{{"Description":"Access for bedrock","Rules":[{{"ResourceType":"index","Resource":["index/*/*"],'
-                    f'"Permission":["aoss:*"]}},{{"ResourceType":"collection","Resource":["collection/*"],'
-                    f'"Permission":["aoss:*"]}}],"Principal":["{bedrock_agent_role.role_arn}",'
+                    f'[{{"Description":"Access for bedrock","Rules":[{{"ResourceType":"index",'
+                    f'"Resource":["index/*/*"],"Permission":["aoss:*"]}},{{"ResourceType":"collection",'
+                    f'"Resource":["collection/*"],"Permission":["aoss:*"]}}],"Principal":["{bedrock_agent_role.role_arn}",'
                     f'"{bedrock_kb_role.role_arn}","{create_index_lambda.role.role_arn}",'
                     f'"arn:aws:iam::{self.account}:root"]}}]'
                 ),
                 type="data",
                 description="Data access policy for the opensearch serverless collection",
             )
+
             opensearch_serverless_collection.add_dependency(
                 opensearch_serverless_access_policy
             )
+
+            aossLambdaParams = {
+                "FunctionName": create_index_lambda.function_name,
+                "InvocationType": "RequestResponse",
+            }
 
             trigger_lambda_cr = cr.AwsCustomResource(
                 self,
@@ -813,10 +912,7 @@ class ChatbotAPIStack(Stack):
                 on_create=cr.AwsSdkCall(
                     service="Lambda",
                     action="invoke",
-                    parameters={
-                        "FunctionName": create_index_lambda.function_name,
-                        "InvocationType": "RequestResponse",
-                    },
+                    parameters=aossLambdaParams,
                     physical_resource_id=cr.PhysicalResourceId.of("Parameter.ARN"),
                 ),
                 policy=cr.AwsCustomResourcePolicy.from_sdk_calls(
@@ -825,13 +921,19 @@ class ChatbotAPIStack(Stack):
                 removal_policy=RemovalPolicy.DESTROY,
                 timeout=Duration.seconds(300),
             )
+
             trigger_lambda_cr.grant_principal.add_to_principal_policy(
                 aws_iam.PolicyStatement(
                     effect=aws_iam.Effect.ALLOW,
-                    actions=["lambda:*", "iam:CreateServiceLinkedRole", "iam:PassRole"],
+                    actions=[
+                        "lambda:*",
+                        "iam:CreateServiceLinkedRole",
+                        "iam:PassRole",
+                    ],
                     resources=["*"],
                 )
             )
+
             trigger_lambda_cr.node.add_dependency(opensearch_serverless_access_policy)
             trigger_lambda_cr.node.add_dependency(opensearch_serverless_collection)
 
@@ -846,14 +948,16 @@ class ChatbotAPIStack(Stack):
                 knowledge_base_configuration=aws_bedrock.CfnKnowledgeBase.KnowledgeBaseConfigurationProperty(
                     type="VECTOR",
                     vector_knowledge_base_configuration=aws_bedrock.CfnKnowledgeBase.VectorKnowledgeBaseConfigurationProperty(
-                        embedding_model_arn=f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v1"
+                        embedding_model_arn=(
+                            f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v1"
+                        )
                     ),
                 ),
                 storage_configuration=aws_bedrock.CfnKnowledgeBase.StorageConfigurationProperty(
                     type="OPENSEARCH_SERVERLESS",
                     opensearch_serverless_configuration=aws_bedrock.CfnKnowledgeBase.OpenSearchServerlessConfigurationProperty(
                         collection_arn=opensearch_serverless_collection.attr_arn,
-                        vector_index_name="kb-docs",
+                        vector_index_name=index_name,
                         field_mapping=aws_bedrock.CfnKnowledgeBase.OpenSearchServerlessFieldMappingProperty(
                             metadata_field="AMAZON_BEDROCK_METADATA",
                             text_field="AMAZON_BEDROCK_TEXT_CHUNK",
@@ -862,6 +966,7 @@ class ChatbotAPIStack(Stack):
                     ),
                 ),
             )
+
             bedrock_knowledge_base.add_dependency(opensearch_serverless_collection)
             bedrock_knowledge_base.node.add_dependency(trigger_lambda_cr)
 
@@ -871,7 +976,8 @@ class ChatbotAPIStack(Stack):
                 name="KbDataSource",
                 knowledge_base_id=bedrock_knowledge_base.ref,
                 description=(
-                    "The S3 data source definition for the bedrock knowledge base containing information about projects."
+                    "The S3 data source definition for the bedrock knowledge base containing"
+                    " information about projects."
                 ),
                 data_source_configuration=aws_bedrock.CfnDataSource.DataSourceConfigurationProperty(
                     s3_configuration=aws_bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
@@ -892,12 +998,10 @@ class ChatbotAPIStack(Stack):
             )
             bedrock_data_source.node.add_dependency(bedrock_knowledge_base)
 
-        # Create the Bedrock Agent with optional KB and Action Groups
         foundation_model_identifier = (
             self.bedrock_agent_inference_profile_arn
             or self.bedrock_agent_foundation_model_id
         )
-        _ = foundation_model_identifier  # kept to document the decision path
 
         self.bedrock_agent = aws_bedrock.CfnAgent(
             self,
@@ -935,9 +1039,11 @@ class ChatbotAPIStack(Stack):
             action_groups=[
                 aws_bedrock.CfnAgent.AgentActionGroupProperty(
                     action_group_name="LookupCatalog",
-                    description="Retrieves beverage catalog entries for Havitush customers.",
+                    description=(
+                        "Retrieves beverage catalog entries for Havitush customers."
+                    ),
                     action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
-                        lambda_=self.lambda_action_groups.function_arn
+                        lambda_=self.lambda_action_groups.function_arn,
                     ),
                     function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
                         functions=[
@@ -961,15 +1067,19 @@ class ChatbotAPIStack(Stack):
                 ),
                 aws_bedrock.CfnAgent.AgentActionGroupProperty(
                     action_group_name="SuggestPairings",
-                    description="Provides curated food or mixer pairings for Havitush beverages.",
+                    description=(
+                        "Provides curated food or mixer pairings for Havitush beverages."
+                    ),
                     action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
-                        lambda_=self.lambda_action_groups.function_arn
+                        lambda_=self.lambda_action_groups.function_arn,
                     ),
                     function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
                         functions=[
                             aws_bedrock.CfnAgent.FunctionProperty(
                                 name="SuggestPairings",
-                                description="Return pairing ideas tailored to the selected drink.",
+                                description=(
+                                    "Return pairing ideas tailored to the selected drink."
+                                ),
                                 parameters={
                                     "drink_name": aws_bedrock.CfnAgent.ParameterDetailProperty(
                                         type="string",
@@ -987,13 +1097,15 @@ class ChatbotAPIStack(Stack):
                     action_group_name="CreateBundles",
                     description="Curates bundles or gift sets for Havitush shoppers.",
                     action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
-                        lambda_=self.lambda_action_groups.function_arn
+                        lambda_=self.lambda_action_groups.function_arn,
                     ),
                     function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
                         functions=[
                             aws_bedrock.CfnAgent.FunctionProperty(
                                 name="CreateBundles",
-                                description="Generate a themed drink bundle based on customer preferences.",
+                                description=(
+                                    "Generate a themed drink bundle based on customer preferences."
+                                ),
                                 parameters={
                                     "theme": aws_bedrock.CfnAgent.ParameterDetailProperty(
                                         type="string",
@@ -1015,12 +1127,14 @@ class ChatbotAPIStack(Stack):
             ],
             knowledge_bases=(
                 [
-                    aws_bedrock.CfnAgent.AgentKnowledgeBaseProperty(
-                        description=(
-                            "Knowledge base with curated tasting notes, catalog entries, "
-                            "and brand storytelling for Havitush drinks."
-                        ),
-                        knowledge_base_id=bedrock_knowledge_base.ref,
+                    (
+                        aws_bedrock.CfnAgent.AgentKnowledgeBaseProperty(
+                            description=(
+                                "Knowledge base with curated tasting notes, catalog entries,"
+                                " and brand storytelling for Havitush drinks."
+                            ),
+                            knowledge_base_id=bedrock_knowledge_base.ref,
+                        )
                     ),
                 ]
                 if self.enable_rag
@@ -1029,12 +1143,15 @@ class ChatbotAPIStack(Stack):
         )
 
         if self.bedrock_agent_inference_profile_arn:
-            # Manually add InferenceProfileArn until CDK exposes it as a typed field
+            # The CloudFormation property was introduced before CDK exposed a typed field.
+            # Manually override the synthesized template so Bedrock uses the required
+            # inference profile when invoking the foundation model.
             self.bedrock_agent.add_override(
                 "Properties.InferenceProfileArn",
                 self.bedrock_agent_inference_profile_arn,
             )
 
+        # Create an alias for the bedrock agent
         cfn_agent_alias = aws_bedrock.CfnAgentAlias(
             self,
             "MyCfnAgentAlias",
@@ -1043,12 +1160,17 @@ class ChatbotAPIStack(Stack):
             description="Alias for invoking the Havitush Bedrock agent",
         )
         cfn_agent_alias.add_dependency(self.bedrock_agent)
-        agent_alias_string = cfn_agent_alias.ref  # "<AGENT_ID>|<ALIAS_ID>"
 
+        # This string will be as <AGENT_ID>|<AGENT_ALIAS_ID>
+        agent_alias_string = cfn_agent_alias.ref
+
+        # Create SSM Parameters for the agent alias to use in the Lambda functions
         aws_ssm.StringParameter(
             self,
             "SSMAgentAlias",
-            parameter_name=f"/{self.deployment_environment}/aws-wpp/bedrock-agent-alias-id-full-string",
+            parameter_name=(
+                f"/{self.deployment_environment}/aws-wpp/bedrock-agent-alias-id-full-string"
+            ),
             string_value=agent_alias_string,
         )
         aws_ssm.StringParameter(
@@ -1057,6 +1179,7 @@ class ChatbotAPIStack(Stack):
             parameter_name=f"/{self.deployment_environment}/aws-wpp/bedrock-agent-id",
             string_value=self.bedrock_agent.ref,
         )
+
         if self.bedrock_agent_inference_profile_arn:
             aws_ssm.StringParameter(
                 self,
@@ -1069,6 +1192,7 @@ class ChatbotAPIStack(Stack):
 
     def _resolve_bedrock_foundation_model_id(self) -> str:
         """Return the model identifier that should back the agent orchestration step."""
+
         configured_model = self.bedrock_agent_foundation_model_id or (
             DEFAULT_AGENT_FOUNDATION_MODEL_ID
         )
@@ -1078,17 +1202,23 @@ class ChatbotAPIStack(Stack):
 
         if configured_model in MODELS_REQUIRING_INFERENCE_PROFILE:
             self.node.add_warning(
-                "Foundation model %s requires an inference profile. "
-                "Falling back to %s for on-demand throughput. Update app_config "
-                "with an inference profile ARN to restore the preferred model."
-                % (configured_model, FALLBACK_AGENT_FOUNDATION_MODEL_ID)
+                "Foundation model %s requires an inference profile. Falling back to %s for"
+                " on-demand throughput. Update app_config with an inference profile ARN to"
+                " restore the preferred model."
+                % (
+                    configured_model,
+                    FALLBACK_AGENT_FOUNDATION_MODEL_ID,
+                )
             )
             return FALLBACK_AGENT_FOUNDATION_MODEL_ID
 
         return configured_model
 
     def generate_cloudformation_outputs(self) -> None:
-        """Add relevant CloudFormation outputs."""
+        """
+        Method to add the relevant CloudFormation outputs.
+        """
+
         CfnOutput(
             self,
             "DeploymentEnvironment",
@@ -1106,6 +1236,7 @@ class ChatbotAPIStack(Stack):
                 ),
                 description="API endpoint Docs",
             )
+
             CfnOutput(
                 self,
                 "APIChatbot",
