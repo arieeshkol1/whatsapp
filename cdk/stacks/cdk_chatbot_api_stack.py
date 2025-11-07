@@ -1,4 +1,4 @@
-    # Built-in imports
+# Built-in imports
 import os
 from typing import Any, Dict, Optional
 
@@ -174,7 +174,6 @@ class ChatbotAPIStack(Stack):
             "*.pyc",
             "__pycache__",
         ]
-
 
         rules_table_name = self.app_config.get("rules_table_name")
         rules_table = None
