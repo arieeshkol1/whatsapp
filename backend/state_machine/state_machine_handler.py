@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import traceback
-from typing import List, Tuple, Optional, Any
+from typing import Any, List, Optional, Tuple
 
 # Safe logger import w/ fallback so tests don't fail during collection
 try:
@@ -14,6 +14,7 @@ except Exception:  # pragma: no cover
     def custom_logger():
         logging.basicConfig(level=logging.INFO)
         return logging.getLogger("wpp-chatbot")
+
 
 logger = custom_logger()
 
@@ -27,7 +28,9 @@ CLASS_MODULE_MAP = {
 }
 
 
-def _extract_params_and_event(raw_event: dict) -> Tuple[Optional[str], Optional[str], dict]:
+def _extract_params_and_event(
+    raw_event: dict,
+) -> Tuple[Optional[str], Optional[str], dict]:
     params = (raw_event or {}).get("params") or {}
     class_name = params.get("class_name")
     method_name = params.get("method_name")
@@ -54,8 +57,8 @@ def _camel_to_snake(name: str) -> str:
 def _base_module_names_for_class(class_name: str) -> List[str]:
     """
     Build base module names to try for a given class.
-    If class is mapped to 'backend.*', also include the non-prefixed counterpart to support
-    runtimes that import from 'state_machine.*'.
+    If class is mapped to 'backend.*', also include the non-prefixed counterpart to
+    support runtimes that import from 'state_machine.*'.
     """
     base_modules: List[str] = []
     mapped = CLASS_MODULE_MAP.get(class_name)
@@ -110,7 +113,7 @@ def _resolve_target(class_name: str, method_name: str):
             break
         except ModuleNotFoundError as exc:
             last_exc = exc
-        except Exception as exc:
+        except Exception as exc:  # unexpected import errors
             logger.debug(
                 {
                     "message": "Unexpected import error",
@@ -121,18 +124,22 @@ def _resolve_target(class_name: str, method_name: str):
             last_exc = ModuleNotFoundError(str(exc))
 
     if module is None:
+        tried = ", ".join(_candidate_modules_for_class(class_name))
         raise ModuleNotFoundError(
-            f"Could not resolve module for class '{class_name}'. "
-            f"Tried: {', '.join(_candidate_modules_for_class(class_name))}"
+            f"Could not resolve module for class '{class_name}'. Tried: {tried}"
         ) from last_exc
 
     clazz = getattr(module, class_name, None)
     if clazz is None:
-        raise ImportError(f"Class '{class_name}' not found in module '{module.__name__}'")
+        raise ImportError(
+            f"Class '{class_name}' not found in module '{module.__name__}'"
+        )
 
     target = getattr(clazz, method_name, None)
     if target is None or not callable(target):
-        raise AttributeError(f"Method '{method_name}' not found/callable on class '{class_name}'")
+        raise AttributeError(
+            f"Method '{method_name}' not found/callable on class '{class_name}'"
+        )
 
     return clazz
 
@@ -156,7 +163,7 @@ def lambda_handler(event: dict, context: Any):
 
         # Ensure test-required field exists
         if isinstance(result, dict):
-            result.setdefault("ExceptionOcurred", False)  # keep test’s key spelling
+            result.setdefault("ExceptionOcurred", False)  # test’s key spelling
         else:
             result = {"result": result, "ExceptionOcurred": False}
 
