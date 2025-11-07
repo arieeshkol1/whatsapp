@@ -19,14 +19,14 @@ env:
   DEPLOYMENT_ENVIRONMENT: ${{ github.event.inputs.environment }}
   CDK_DISABLE_VERSION_CHECK: "true"
 
-  # Use the big secondary disk on GitHub runners
-  RUNNER_TEMP: /mnt/runner-temp
-  ACTIONS_RUNNER_TEMP: /mnt/runner-temp
-  TMPDIR: /mnt/runner-temp
-  PIP_CACHE_DIR: /mnt/pip-cache
-  POETRY_CACHE_DIR: /mnt/poetry-cache
-  npm_config_cache: /mnt/npm-cache
-  YARN_CACHE_FOLDER: /mnt/yarn-cache
+  # Put all temps/caches inside the repo (always writable)
+  RUNNER_TEMP: ${{ github.workspace }}/_tmp
+  ACTIONS_RUNNER_TEMP: ${{ github.workspace }}/_tmp
+  TMPDIR: ${{ github.workspace }}/_tmp
+  PIP_CACHE_DIR: ${{ github.workspace }}/_pip-cache
+  POETRY_CACHE_DIR: ${{ github.workspace }}/_poetry-cache
+  npm_config_cache: ${{ github.workspace }}/_npm-cache
+  YARN_CACHE_FOLDER: ${{ github.workspace }}/_yarn-cache
   NODE_OPTIONS: "--max-old-space-size=4096"
 
 jobs:
@@ -36,15 +36,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare large temp/cache dirs
+      - name: Prepare temp/cache dirs
         run: |
-          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
           df -h
 
       - name: Runner Details
         run: |
-          echo "Job triggered by ${{ github.event_name }} event."
-          echo "Running on ${{ runner.os }} in ${{ github.repository }} @ ${{ github.ref }}"
+          echo "Triggered by: ${{ github.event_name }}"
+          echo "Repo: ${{ github.repository }} @ ${{ github.ref }}"
           df -h
 
       - name: Setup Python
@@ -58,7 +58,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install dependencies (no cache action)
+      - name: Install dependencies
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
@@ -76,9 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare large temp/cache dirs
+      - name: Prepare temp/cache dirs
         run: |
-          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
           df -h
 
       - name: Setup Python
@@ -92,7 +92,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install dependencies (no cache action)
+      - name: Install dependencies
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
@@ -120,9 +120,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare large temp/cache dirs
+      - name: Prepare temp/cache dirs
         run: |
-          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
+          df -h
+
+      - name: Aggressive cleanup to free space
+        run: |
+          sudo rm -rf /usr/local/lib/android \
+                      /opt/ghc \
+                      /usr/local/.ghcup \
+                      /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af || true
+          sudo rm -rf /var/lib/apt/lists/* || true
           df -h
 
       - name: Setup Python
@@ -136,7 +146,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install dependencies (no cache action)
+      - name: Install dependencies
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
@@ -235,9 +245,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare large temp/cache dirs
+      - name: Prepare temp/cache dirs
         run: |
-          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
+          df -h
+
+      - name: Aggressive cleanup to free space
+        run: |
+          sudo rm -rf /usr/local/lib/android \
+                      /opt/ghc \
+                      /usr/local/.ghcup \
+                      /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af || true
+          sudo rm -rf /var/lib/apt/lists/* || true
           df -h
 
       - name: Setup Python
@@ -251,7 +271,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install dependencies (no cache action)
+      - name: Install dependencies
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
