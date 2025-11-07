@@ -154,11 +154,9 @@ class ChatbotAPIStack(Stack):
         """
         Create the Lambda Functions for the solution.
         """
-        # Get relative path for folder that contains Lambda function source
-        # ! Note--> we must obtain parent dirs to create path (that"s why there is "os.path.dirname()")
-        PATH_TO_LAMBDA_FUNCTION_FOLDER = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "backend",
+        # Get project root path so the packaged artifact includes the backend package
+        PROJECT_ROOT = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         )
 
         rules_table_name = self.app_config.get("rules_table_name")
@@ -175,9 +173,9 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-WhatsApp-Webhook",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="whatsapp_webhook/api/v1/main.handler",
+            handler="backend.whatsapp_webhook.api.v1.main.handler",
             function_name=f"{self.main_resources_name}-input",
-            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(20),
             memory_size=512,
             environment={
@@ -200,9 +198,9 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-Trigger-Message-Processing",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="trigger/trigger_handler.lambda_handler",
+            handler="backend.trigger.trigger_handler.lambda_handler",
             function_name=f"{self.main_resources_name}-trigger-state-machine",
-            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(20),
             memory_size=512,
             environment={
@@ -233,7 +231,7 @@ class ChatbotAPIStack(Stack):
             runtime=aws_lambda.Runtime.PYTHON_3_11,
             handler="backend.state_machine.state_machine_handler.lambda_handler",
             function_name=f"{self.main_resources_name}-state-machine-lambda",
-            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(60),
             memory_size=512,
             environment=state_machine_environment,
@@ -294,9 +292,9 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-AG-Generic",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="bedrock_agent/lambda_function.lambda_handler",
+            handler="backend.bedrock_agent.lambda_function.lambda_handler",
             function_name=f"{self.main_resources_name}-bedrock-action-groups",
-            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
+            code=aws_lambda.Code.from_asset(PROJECT_ROOT),
             timeout=Duration.seconds(60),
             memory_size=512,
             environment={

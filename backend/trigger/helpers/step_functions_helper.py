@@ -11,7 +11,7 @@ from aws_lambda_powertools.utilities.data_classes.dynamo_db_stream_event import 
 )
 
 # Own imports
-from common.logger import custom_logger
+from backend.common.logger import custom_logger
 
 LOGGER = custom_logger()
 

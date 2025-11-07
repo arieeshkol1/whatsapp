@@ -3,8 +3,8 @@ from datetime import datetime
 
 # Own imports
 from ..base_step_function import BaseStepFunction
-from common.enums import WhatsAppMessageTypes
-from common.logger import custom_logger
+from backend.common.enums import WhatsAppMessageTypes
+from backend.common.logger import custom_logger
 
 from ..processing.bedrock_agent import call_bedrock_agent
 

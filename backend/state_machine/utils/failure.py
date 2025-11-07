@@ -1,5 +1,5 @@
 # Own imports
-from common.logger import custom_logger
+from backend.common.logger import custom_logger
 from ..base_step_function import BaseStepFunction
 
 

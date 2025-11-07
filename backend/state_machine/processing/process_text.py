@@ -3,20 +3,8 @@ from typing import List, Optional
 
 # Own imports
 from ..base_step_function import BaseStepFunction
-from common.enums import WhatsAppMessageTypes
-from common.logger import custom_logger
-from common.helpers.dynamodb_helper import DynamoDBHelper
-from common.customer_profiles import (
-    format_customer_summary,
-    load_customer_profile,
-)
-from common.conversation_state import (
-    extract_state_updates_from_message,
-    format_order_progress_summary,
-    merge_conversation_state,
-)
-from common.rules_config import get_rules_text
-from .customer_flow import ConversationFlow
+from backend.common.enums import WhatsAppMessageTypes
+from backend.common.logger import custom_logger
 
 from ..processing.bedrock_agent import call_bedrock_agent
 

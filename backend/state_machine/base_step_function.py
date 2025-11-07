@@ -6,7 +6,7 @@ from typing import Optional
 from aws_lambda_powertools import Logger
 
 # Own imports
-from common.logger import custom_logger
+from backend.common.logger import custom_logger
 
 
 class BaseStepFunction:

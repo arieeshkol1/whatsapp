@@ -7,7 +7,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 # Own imports
-from common.logger import custom_logger
+from backend.common.logger import custom_logger
 
 logger = custom_logger()
 
