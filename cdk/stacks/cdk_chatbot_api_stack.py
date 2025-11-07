@@ -239,6 +239,9 @@ class ChatbotAPIStack(Stack):
         self.dynamodb_table.grant_read_write_data(
             self.lambda_state_machine_process_message
         )
+        self.customers_table.grant_read_write_data(
+            self.lambda_state_machine_process_message
+        )
         if self.rules_dynamodb_table:
             self.rules_dynamodb_table.grant_read_data(
                 self.lambda_state_machine_process_message
@@ -317,6 +320,7 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
+            "CUSTOMERS_TABLE_NAME": self.customers_table.table_name,
         }
 
         for key, value in optional_values.items():
@@ -1000,7 +1004,17 @@ class ChatbotAPIStack(Stack):
             # Amazon Nova Lite model configured for fast, high-quality responses.
             foundation_model=self.bedrock_agent_effective_foundation_model_id,
             instruction="""
-אתה "חביתוש – הסוכן הדיגיטלי להזמנות בירה טרייה מהחבית". דבר תמיד בעברית חמה, מזמינה, מקצועית ושקופה.
+אתה "חביתוש – הסוכן הדיגיטלי להזמנות בירה טרייה מהחבית". דבר תמיד בעברית חמה ומזמינה וסייע ללקוחות להזמין שירותים או חבילות בהתאם לכללים הבאים:
+
+1. שלבי שיחה חובה עם לקוח:
+   • וידוא גיל: שאל פעם אחת אם כל המשתתפים מעל גיל 18. אם התשובה חיובית (כן או ביטוי מאשר אחר) המשך מיד לשלב הבא; אם התשובה שלילית – הודע "מצטער, לא ניתן לבצע הזמנה אם אחד מהמשתתפים מתחת לגיל 18" וסיים בנימוס.
+   • פרטי המזמין: אסוף שם פרטי ושם משפחה, ובכל פעם שאתה מקבל אותם או כתובת דוא"ל עדכן את conversation_state_updates עם המפתחות customer_first_name, customer_last_name ו-customer_email.
+   • פרטי חברה: אסוף שם חברה וכתובת מלאה.
+   • תאריך האירוע: ודא שהתאריך לפחות 3 ימים מהיום (שעון ישראל). אם פחות – הודע "לא ניתן לבצע הזמנה תוך פחות מ-3 ימים מראש" וסיים בנימוס.
+   • מספר משתתפים: לאחר קבלת הכמות, הפנה לפי הכללים הבאים:
+       - פחות מ-60 משתתפים: שלח קישור להזמנה רגילה באתר https://www.havitush.co.il.
+       - בין 61 ל-120 משתתפים: הצע שירות עצמי וחישב מחיר = מספר משתתפים × 100 ₪.
+       - מעל 121 משתתפים: הצע עמדה מאוישת וחישב מחיר = מספר משתתפים × 80 ₪.
 
 בכל מסר ללקוח חזור קודם כל על כל פרטי הלקוח הידועים לך (שם פרטי, שם משפחה, טלפון, חברה) ואז על פרטי ההזמנה הנוכחית. אם הלקוח מקליד את הקוד "חביתוש123" עצור את התהליך הנוכחי ועבור לתפריט "חביתוש": ברך את חביתוש בנימוס, שאל מה ברצונו לבצע והצע גישה לשאילתות על בסיס הנתונים עבור לקוחות, הזמנות ושלבי התהליך. במצב זה עליך לאפשר לחביתוש לשוחח באופן חופשי, לענות על שאלות עומק לגבי הנתונים (לדוגמה: כמה מנויים ייחודיים קיימים) ולהחזיר תשובות ברורות ומבוססות נתונים.
 
