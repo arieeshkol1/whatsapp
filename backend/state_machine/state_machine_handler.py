@@ -2,7 +2,8 @@ import json
 import importlib
 import traceback
 
-from common.logger import custom_logger
+# Own imports
+from .__init__ import *  # noqa NOSONAR
 
 logger = custom_logger()
 

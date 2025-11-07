@@ -1,6 +1,7 @@
 import os
 from typing import List, Optional
 
+# Own imports
 from ..base_step_function import BaseStepFunction
 from common.enums import WhatsAppMessageTypes
 from common.logger import custom_logger
@@ -17,7 +18,7 @@ from common.conversation_state import (
 from common.rules_config import get_rules_text
 from .customer_flow import ConversationFlow
 
-from .bedrock_agent import call_bedrock_agent
+from ..processing.bedrock_agent import call_bedrock_agent
 
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL")

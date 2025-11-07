@@ -5,7 +5,7 @@ import os
 from urllib.parse import urljoin
 
 # Own imports
-from .enums import MetaAPIVersion
+from ..meta.enums import MetaAPIVersion
 from common.helpers.secrets_helper import SecretsHelper
 
 # Load environment variables

@@ -11,11 +11,11 @@ import requests
 # Own imports
 from common.helpers.secrets_helper import SecretsHelper
 from common.logger import custom_logger
-from .api_utils import (
+from ..meta.api_utils import (
     get_api_endpoint,
     get_api_headers,
 )
-from state_machine.integrations.meta.schemas import MetaPostMessageModel
+from ..meta.schemas import MetaPostMessageModel
 
 
 class MetaAPI:
