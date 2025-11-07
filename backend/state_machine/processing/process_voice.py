@@ -10,30 +10,24 @@ from ..processing.bedrock_agent import call_bedrock_agent
 
 
 logger = custom_logger()
-ALLOWED_MESSAGE_TYPES = WhatsAppMessageTypes.__members__
 
 
 class ProcessVoice(BaseStepFunction):
-    """
-    This class contains methods that serve as the "voice processing" for the State Machine.
-    """
+    """Voice processing placeholder for the State Machine."""
 
     def __init__(self, event):
         super().__init__(event, logger=logger)
 
     def process_voice(self):
-        """
-        Method to process the voice input message and convert it to text.
-        """
-
+        """Convert voice to text (placeholder) and return a response."""
         self.logger.info("Starting process_voice for the chatbot")
 
-        # TODO: Add real voice to text conversion here...
+        # TODO: implement voice-to-text
+        response_text = (
+            "NOT IMPLEMENTED. PLEASE ANSWER: "
+            "<I am not able to process voice messages yet>."
+        )
 
-        self.text = "NOT IMPLEMENTED. PLEASE ANSWER: <I am not able to process voice messages yet>."
-
-        self.logger.info(f"Generated response message: {self.text}")
-
-        self.event["input"]["dynamodb"]["NewImage"]["S"] = self.text
-
+        self.logger.info(f"Generated response message: {response_text}")
+        self.event["response_message"] = response_text
         return self.event
