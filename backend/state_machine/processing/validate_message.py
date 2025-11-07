@@ -60,11 +60,9 @@ class ValidateMessage(BaseStepFunction):
         self.logger.info(
             "Validated message",
             extra={
-                "from_number_masked": (
-                    (from_number[:4] + "***" + from_number[-2:])
-                    if from_number
-                    else "<none>"
-                ),
+                "from_number_masked": (from_number[:4] + "***" + from_number[-2:])
+                if from_number
+                else "<none>",
                 "msg_type": msg_type,
                 "has_text": bool(text),
                 "whatsapp_id": whatsapp_id,

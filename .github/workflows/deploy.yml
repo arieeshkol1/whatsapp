@@ -16,18 +16,8 @@ on:
 env:
   AWS_DEFAULT_REGION: us-east-1
   AWS_DEFAULT_OUTPUT: json
+  # IMPORTANT FOR THE CDK DEPLOYMENT ENV
   DEPLOYMENT_ENVIRONMENT: ${{ github.event.inputs.environment }}
-  CDK_DISABLE_VERSION_CHECK: "true"
-
-  # Put all temps/caches inside the repo (always writable)
-  RUNNER_TEMP: ${{ github.workspace }}/_tmp
-  ACTIONS_RUNNER_TEMP: ${{ github.workspace }}/_tmp
-  TMPDIR: ${{ github.workspace }}/_tmp
-  PIP_CACHE_DIR: ${{ github.workspace }}/_pip-cache
-  POETRY_CACHE_DIR: ${{ github.workspace }}/_poetry-cache
-  npm_config_cache: ${{ github.workspace }}/_npm-cache
-  YARN_CACHE_FOLDER: ${{ github.workspace }}/_yarn-cache
-  NODE_OPTIONS: "--max-old-space-size=4096"
 
 jobs:
   code-quality:
@@ -36,16 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare temp/cache dirs
-        run: |
-          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
-          df -h
-
       - name: Runner Details
         run: |
-          echo "Triggered by: ${{ github.event_name }}"
-          echo "Repo: ${{ github.repository }} @ ${{ github.ref }}"
-          df -h
+          echo "Job triggered by ${{ github.event_name }} event."
+          echo "Job running on a ${{ runner.os }} server hosted by GitHub."
+          echo "Pipeline's branch name is ${{ github.ref }} and repository is ${{ github.repository }}."
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -57,6 +42,14 @@ jobs:
           python -m pip install --upgrade pip pipx
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
@@ -76,22 +69,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare temp/cache dirs
-        run: |
-          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
-          df -h
-
-      - name: Setup Node (required for JSII)
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Ensure JSII temp dir exists
-        run: |
-          mkdir -p "$RUNNER_TEMP" "$RUNNER_TEMP/jsii"
-          echo "JSII_TMPDIR=$RUNNER_TEMP/jsii" >> $GITHUB_ENV
-          ls -ld "$RUNNER_TEMP" "$RUNNER_TEMP/jsii"
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -102,6 +79,14 @@ jobs:
           python -m pip install --upgrade pip pipx
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
@@ -126,25 +111,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: ["code-quality", "unit-tests"]
     permissions:
-      id-token: write
+      id-token: write # required if later switching to OIDC
       contents: read
     steps:
       - uses: actions/checkout@v4
-
-      - name: Prepare temp/cache dirs
-        run: |
-          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
-          df -h
-
-      - name: Aggressive cleanup to free space
-        run: |
-          sudo rm -rf /usr/local/lib/android \
-                      /opt/ghc \
-                      /usr/local/.ghcup \
-                      /opt/hostedtoolcache/CodeQL
-          sudo docker system prune -af || true
-          sudo rm -rf /var/lib/apt/lists/* || true
-          df -h
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -156,6 +126,14 @@ jobs:
           python -m pip install --upgrade pip pipx
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
@@ -174,6 +152,7 @@ jobs:
       - name: Install CDK
         run: npm install -g aws-cdk
 
+      # Configure AWS for DEV or PROD
       - name: Configure AWS Credentials (DEV)
         if: github.event.inputs.environment == 'dev'
         uses: aws-actions/configure-aws-credentials@v4
@@ -199,16 +178,15 @@ jobs:
       - name: Who am I (debug)
         run: aws sts get-caller-identity
 
-      - name: CDK Synth (no staging)
+      - name: CDK Synth
         run: |
           source .venv/bin/activate
-          cdk synth --no-staging
-          df -h
+          cdk synth
 
-      - name: CDK Diff (no staging)
+      - name: CDK Diff
         run: |
           source .venv/bin/activate
-          cdk diff --no-staging
+          cdk diff
 
       - name: Archive CDK Synth results (no assets)
         uses: actions/upload-artifact@v4
@@ -256,21 +234,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare temp/cache dirs
-        run: |
-          mkdir -p "$RUNNER_TEMP" "$PIP_CACHE_DIR" "$POETRY_CACHE_DIR" "$npm_config_cache" "$YARN_CACHE_FOLDER"
-          df -h
-
-      - name: Aggressive cleanup to free space
-        run: |
-          sudo rm -rf /usr/local/lib/android \
-                      /opt/ghc \
-                      /usr/local/.ghcup \
-                      /opt/hostedtoolcache/CodeQL
-          sudo docker system prune -af || true
-          sudo rm -rf /var/lib/apt/lists/* || true
-          df -h
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -281,6 +244,14 @@ jobs:
           python -m pip install --upgrade pip pipx
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
@@ -299,6 +270,7 @@ jobs:
       - name: Install CDK
         run: npm install -g aws-cdk
 
+      # Configure AWS for DEV or PROD
       - name: Configure AWS Credentials (DEV)
         if: github.event.inputs.environment == 'dev'
         uses: aws-actions/configure-aws-credentials@v4
@@ -324,7 +296,7 @@ jobs:
       - name: Who am I (debug)
         run: aws sts get-caller-identity
 
-      - name: CDK Deploy (no staging)
+      - name: CDK Deploy
         run: |
           source .venv/bin/activate
-          cdk deploy --no-staging --require-approval never
+          cdk deploy --require-approval never

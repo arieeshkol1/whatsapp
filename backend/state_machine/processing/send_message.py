@@ -72,6 +72,7 @@ def get_secret_value(secret_name: str) -> str:
         )
         raise
 
+
     try:
         resp = _get_secrets_client().get_secret_value(SecretId=secret_name)
         secret = resp.get("SecretString") or ""
