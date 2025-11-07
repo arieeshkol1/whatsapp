@@ -5,8 +5,8 @@ import os
 from urllib.parse import urljoin
 
 # Own imports
-from state_machine.integrations.meta.enums import MetaAPIVersion
-from common.helpers.secrets_helper import SecretsHelper
+from ..meta.enums import MetaAPIVersion
+from backend.common.helpers.secrets_helper import SecretsHelper
 
 # Load environment variables
 META_ENDPOINT = os.environ.get("META_ENDPOINT")

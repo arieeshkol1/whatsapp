@@ -8,10 +8,10 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, Query, Request, Response, status
 
 # Own imports
-from common.models.text_message_model import TextMessageModel
-from common.logger import custom_logger
-from common.helpers.dynamodb_helper import DynamoDBHelper
-from common.helpers.secrets_helper import SecretsHelper
+from backend.common.models.text_message_model import TextMessageModel
+from backend.common.logger import custom_logger
+from backend.common.helpers.dynamodb_helper import DynamoDBHelper
+from backend.common.helpers.secrets_helper import SecretsHelper
 
 # Initialize Secrets Manager Helper
 DEFAULT_SECRET_NAME = "/dev/aws-whatsapp-chatbot"
