@@ -1,6 +1,4 @@
-cat > .github/workflows/deploy.yml <<'YAML'
-# --- BEGIN WORKFLOW ---
-name: Deploy
+name: deploy
 run-name: Deploy Chatbot to ${{ github.event.inputs.environment }}
 
 on:
