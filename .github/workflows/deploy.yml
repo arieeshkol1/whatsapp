@@ -1,4 +1,4 @@
-name: deploy
+name: Deploy
 run-name: Deploy Chatbot to ${{ github.event.inputs.environment }}
 
 on:
@@ -18,6 +18,8 @@ env:
   AWS_DEFAULT_OUTPUT: json
   DEPLOYMENT_ENVIRONMENT: ${{ github.event.inputs.environment }}
   CDK_DISABLE_VERSION_CHECK: "true"
+
+  # Use the big secondary disk on GitHub runners
   RUNNER_TEMP: /mnt/runner-temp
   ACTIONS_RUNNER_TEMP: /mnt/runner-temp
   TMPDIR: /mnt/runner-temp
@@ -42,8 +44,8 @@ jobs:
       - name: Runner Details
         run: |
           echo "Job triggered by ${{ github.event_name }} event."
-          echo "Job running on a ${{ runner.os }} server hosted by GitHub."
-          echo "Pipeline's branch name is ${{ github.ref }} and repository is ${{ github.repository }}."
+          echo "Running on ${{ runner.os }} in ${{ github.repository }} @ ${{ github.ref }}"
+          df -h
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -180,6 +182,7 @@ jobs:
         run: |
           source .venv/bin/activate
           cdk synth --no-staging
+          df -h
 
       - name: CDK Diff (no staging)
         run: |
@@ -294,5 +297,3 @@ jobs:
         run: |
           source .venv/bin/activate
           cdk deploy --no-staging --require-approval never
-# --- END WORKFLOW ---
-YAML
