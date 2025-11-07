@@ -16,10 +16,18 @@ on:
 env:
   AWS_DEFAULT_REGION: us-east-1
   AWS_DEFAULT_OUTPUT: json
-  # IMPORTANT FOR THE CDK DEPLOYMENT ENV
   DEPLOYMENT_ENVIRONMENT: ${{ github.event.inputs.environment }}
-  # Avoid CLI version checks to save time
   CDK_DISABLE_VERSION_CHECK: "true"
+
+  # Route all temp/caches to /mnt (large free space on GH runners)
+  RUNNER_TEMP: /mnt/runner-temp
+  ACTIONS_RUNNER_TEMP: /mnt/runner-temp
+  TMPDIR: /mnt/runner-temp
+  PIP_CACHE_DIR: /mnt/pip-cache
+  POETRY_CACHE_DIR: /mnt/poetry-cache
+  npm_config_cache: /mnt/npm-cache
+  YARN_CACHE_FOLDER: /mnt/yarn-cache
+  NODE_OPTIONS: "--max-old-space-size=4096"
 
 jobs:
   code-quality:
@@ -27,6 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare large temp/cache dirs
+        run: |
+          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          df -h
 
       - name: Runner Details
         run: |
@@ -45,15 +58,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-
-
-      - name: Install dependencies
+      - name: Install dependencies (no cache action)
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
@@ -71,6 +76,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare large temp/cache dirs
+        run: |
+          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          df -h
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -82,15 +92,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-
-
-      - name: Install dependencies
+      - name: Install dependencies (no cache action)
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
@@ -113,10 +115,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: ["code-quality", "unit-tests"]
     permissions:
-      id-token: write # required if later switching to OIDC
+      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare large temp/cache dirs
+        run: |
+          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          df -h
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -129,15 +136,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-
-
-      - name: Install dependencies
+      - name: Install dependencies (no cache action)
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
@@ -180,47 +179,12 @@ jobs:
       - name: Who am I (debug)
         run: aws sts get-caller-identity
 
-      # >>> Disk cleanup to recover GBs before synth
-      - name: Free disk space (before CDK synth)
-        shell: bash
-        run: |
-          echo "Disk usage before cleanup:"
-          df -h
-
-          echo "Prune Docker images/containers/volumes"
-          docker system prune -af || true
-          docker volume prune -f || true
-
-          echo "Clean apt caches"
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
-
-          echo "Remove SDKs you don't use"
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/lib/android
-
-          echo "Clear Python caches"
-          poetry cache clear --all pypi || true
-          pip cache purge || true
-
-          echo "Clear Node/Yarn caches (if present)"
-          npm cache clean --force || true
-          yarn cache clean || true
-
-          echo "Delete repo build artifacts and caches"
-          rm -rf cdk.out .pytest_cache .mypy_cache **/__pycache__ .ruff_cache .coverage .tox
-
-          echo "Disk usage after cleanup:"
-          df -h
-      # <<<
-
-      - name: CDK Synth
+      - name: CDK Synth (no staging)
         run: |
           source .venv/bin/activate
           cdk synth --no-staging
 
-      - name: CDK Diff
+      - name: CDK Diff (no staging)
         run: |
           source .venv/bin/activate
           cdk diff --no-staging
@@ -245,7 +209,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: cdk-synth-folder
-          path: ./cdk-synth-output-folder
+        path: ./cdk-synth-output-folder
 
       - name: Display files in the output folder
         run: tree
@@ -271,6 +235,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare large temp/cache dirs
+        run: |
+          mkdir -p /mnt/runner-temp /mnt/pip-cache /mnt/poetry-cache /mnt/npm-cache /mnt/yarn-cache
+          df -h
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -282,15 +251,7 @@ jobs:
           pipx install "poetry==1.8.3"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-
-
-      - name: Install dependencies
+      - name: Install dependencies (no cache action)
         run: |
           poetry config virtualenvs.in-project true
           for i in 1 2 3; do
@@ -333,24 +294,7 @@ jobs:
       - name: Who am I (debug)
         run: aws sts get-caller-identity
 
-      # Same cleanup pre-deploy (deploy internally synthesizes again)
-      - name: Free disk space (before CDK deploy)
-        shell: bash
-        run: |
-          df -h
-          docker system prune -af || true
-          docker volume prune -f || true
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
-          poetry cache clear --all pypi || true
-          pip cache purge || true
-          npm cache clean --force || true
-          yarn cache clean || true
-          rm -rf cdk.out .pytest_cache .mypy_cache **/__pycache__ .ruff_cache .coverage .tox
-          df -h
-
-      - name: CDK Deploy
+      - name: CDK Deploy (no staging)
         run: |
           source .venv/bin/activate
           cdk deploy --no-staging --require-approval never
