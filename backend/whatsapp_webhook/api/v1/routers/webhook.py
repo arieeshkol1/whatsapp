@@ -1,6 +1,7 @@
 # Built-in imports
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Annotated
 from uuid import uuid4
 
@@ -21,6 +22,9 @@ secrets_helper = SecretsHelper(SECRET_NAME)
 # Initialize DynamoDB Helper
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL")  # Used for local testing
+CONVERSATION_TIMEOUT_MINUTES = int(
+    os.environ.get("CONVERSATION_TIMEOUT_MINUTES", "180")
+)
 dynamodb_helper = DynamoDBHelper(table_name=DYNAMODB_TABLE, endpoint_url=ENDPOINT_URL)
 
 
@@ -85,11 +89,16 @@ async def post_chatbot_webhook(
         wpp_id = message["id"]
         wpp_timestamp = message["timestamp"]
         wpp_type = message["type"]
-        created_at = datetime.now(timezone.utc).isoformat()
+        created_at_dt = datetime.now(timezone.utc)
+        created_at = created_at_dt.isoformat()
 
         # Initialize the Message Model based on the type of message
         message_item = None
         if wpp_type == "text":
+            conversation_id = _determine_conversation_id(
+                wpp_from_phone_number, created_at_dt
+            )
+
             message_item = TextMessageModel(
                 PK=f"NUMBER#{wpp_from_phone_number}",
                 SK=f"MESSAGE#{created_at}",
@@ -100,6 +109,7 @@ async def post_chatbot_webhook(
                 whatsapp_timestamp=wpp_timestamp,
                 text=message["text"]["body"],
                 correlation_id=correlation_id,
+                conversation_id=conversation_id,
             )
             logger.info(
                 message_item.model_dump(),
@@ -118,3 +128,47 @@ async def post_chatbot_webhook(
     except Exception as e:
         logger.error(f"Error in post_chatbot_webhook(): {e}")
         raise e
+
+
+def _extract_conversation_id_value(raw_value) -> int:
+    if raw_value is None:
+        return 0
+    if isinstance(raw_value, Decimal):
+        return int(raw_value)
+    if isinstance(raw_value, (int, float)):
+        return int(raw_value)
+    if isinstance(raw_value, str) and raw_value.isdigit():
+        return int(raw_value)
+    return 0
+
+
+def _determine_conversation_id(phone_number: str, created_at: datetime) -> int:
+    """Determine the conversation id for the incoming message."""
+
+    partition_key = f"NUMBER#{phone_number}"
+    latest_item = dynamodb_helper.get_latest_item_by_pk(partition_key)
+    if not latest_item:
+        return 1
+
+    last_conversation = _extract_conversation_id_value(
+        latest_item.get("conversation_id")
+    )
+    if last_conversation < 1:
+        last_conversation = 1
+
+    last_created_at_raw = latest_item.get("created_at")
+    last_created_at: datetime | None = None
+    if isinstance(last_created_at_raw, str):
+        try:
+            last_created_at = datetime.fromisoformat(last_created_at_raw)
+        except ValueError:
+            last_created_at = None
+
+    if last_created_at is None:
+        return last_conversation
+
+    time_delta = created_at - last_created_at
+    if time_delta <= timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES):
+        return last_conversation
+
+    return last_conversation + 1

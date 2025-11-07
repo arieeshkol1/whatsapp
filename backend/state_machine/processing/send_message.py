@@ -17,6 +17,13 @@ from backend.common.logger import custom_logger
 # If you need MetaAPI integration, it's resolved lazily the first time you send a
 # message (and is safely mockable in tests).
 
+# NOTE:
+# We intentionally avoid importing or instantiating anything that performs network
+# calls at import time. This keeps unit test *collection* free of AWS/env coupling.
+#
+# If you need MetaAPI integration, it's resolved lazily the first time you send a
+# message (and is safely mockable in tests).
+
 
 logger = custom_logger()
 
@@ -33,6 +40,38 @@ def get_secret_value(secret_name: str) -> str:
 
     This function is NOT called at import time. It is safe to mock in unit tests.
     """
+    try:
+        resp = _get_secrets_client().get_secret_value(SecretId=secret_name)
+        secret = resp.get("SecretString") or ""
+        if not secret:
+            raise RuntimeError(f"Secret '{secret_name}' returned empty SecretString")
+        return secret
+    except (ClientError, BotoCoreError) as exc:
+        logger.error(
+            {
+                "message": "Failed to fetch secret",
+                "secret_name": secret_name,
+                "error": str(exc),
+            }
+        )
+        raise
+
+    try:
+        resp = _get_secrets_client().get_secret_value(SecretId=secret_name)
+        secret = resp.get("SecretString") or ""
+        if not secret:
+            raise RuntimeError(f"Secret '{secret_name}' returned empty SecretString")
+        return secret
+    except (ClientError, BotoCoreError) as exc:
+        logger.error(
+            {
+                "message": "Failed to fetch secret",
+                "secret_name": secret_name,
+                "error": str(exc),
+            }
+        )
+        raise
+
 
     try:
         resp = _get_secrets_client().get_secret_value(SecretId=secret_name)
