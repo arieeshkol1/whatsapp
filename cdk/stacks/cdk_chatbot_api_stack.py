@@ -231,7 +231,7 @@ class ChatbotAPIStack(Stack):
             self,
             "Lambda-SM-Process-Message",
             runtime=aws_lambda.Runtime.PYTHON_3_11,
-            handler="state_machine/state_machine_handler.lambda_handler",
+            handler="backend.state_machine.state_machine_handler.lambda_handler",
             function_name=f"{self.main_resources_name}-state-machine-lambda",
             code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
             timeout=Duration.seconds(60),
