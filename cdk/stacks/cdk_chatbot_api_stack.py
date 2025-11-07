@@ -250,14 +250,10 @@ class ChatbotAPIStack(Stack):
                 self.lambda_state_machine_process_message
             )
         self.lambda_state_machine_process_message.role.add_managed_policy(
-            aws_iam.ManagedPolicy.from_aws_managed_policy_name(
-                "AmazonSSMReadOnlyAccess"
-            )
+            aws_iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMReadOnlyAccess")
         )
         self.lambda_state_machine_process_message.role.add_managed_policy(
-            aws_iam.ManagedPolicy.from_aws_managed_policy_name(
-                "AmazonBedrockFullAccess"
-            )
+            aws_iam.ManagedPolicy.from_aws_managed_policy_name("AmazonBedrockFullAccess")
         )
         self.lambda_state_machine_process_message.role.add_to_policy(
             aws_iam.PolicyStatement(
@@ -269,6 +265,7 @@ class ChatbotAPIStack(Stack):
                 ],
             )
         )
+
 
         # Lambda Function for the Bedrock Agent Group (fetch recipes)
         bedrock_agent_lambda_role = aws_iam.Role(
