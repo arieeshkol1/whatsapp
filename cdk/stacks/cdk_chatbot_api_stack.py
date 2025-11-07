@@ -241,6 +241,7 @@ class ChatbotAPIStack(Stack):
                 self.lambda_layer_common,
             ],
         )
+        
         # Grants & policies for the state-machine processor Lambda
         self.secret_chatbot.grant_read(self.lambda_state_machine_process_message)
         self.dynamodb_table.grant_read_write_data(
