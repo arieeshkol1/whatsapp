@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Dict, Any, Callable
+from typing import Any, Callable, Dict, Optional
 
-import boto3
+import boto3  # required for secrets manager (lazy-used only)
 from botocore.exceptions import BotoCoreError, ClientError
 
 from common.logger import custom_logger
 
-# ---------------------------------------------------------------------------
 # NOTE:
-# We intentionally avoid creating AWS clients or reading secrets at import time.
-# This makes the module safe to import during unit tests (no AWS creds needed).
-# ---------------------------------------------------------------------------
+# We intentionally avoid importing or instantiating anything that performs network
+# calls at import time. This keeps unit test *collection* free of AWS/env coupling.
+#
+# If you need MetaAPI integration, it's resolved lazily the first time you send a
+# message (and is safely mockable in tests).
+
 
 logger = custom_logger()
 
 
 def _get_secrets_client():
     """Lazy creator for AWS Secrets Manager client."""
+
     return boto3.client("secretsmanager")
 
 
@@ -46,13 +49,29 @@ def get_secret_value(secret_name: str) -> str:
         )
         raise
 
+    try:
+        resp = _get_secrets_client().get_secret_value(SecretId=secret_name)
+        secret = resp.get("SecretString") or ""
+        if not secret:
+            raise RuntimeError(f"Secret '{secret_name}' returned empty SecretString")
+        return secret
+    except (ClientError, BotoCoreError) as exc:
+        logger.error(
+            {
+                "message": "Failed to fetch secret",
+                "secret_name": secret_name,
+                "error": str(exc),
+            }
+        )
+        raise
+
 
 class SendMessage:
     """
-    Wrapper responsible for sending messages through the Meta (WhatsApp) API.
+    A light wrapper responsible for sending messages through the Meta (WhatsApp) API.
 
     Design goals:
-    - No network or AWS calls during import or initialization.
+    - No network or AWS calls during import/initialization unless absolutely necessary.
     - Dependency injection friendly (pass your own meta_api or token provider).
     - Easy to mock in tests.
     """
@@ -60,11 +79,15 @@ class SendMessage:
     def __init__(
         self,
         meta_api: Optional[Any] = None,
+        # If you provide a token directly, we won't call Secrets Manager.
         auth_token: Optional[str] = None,
+        # If you want us to fetch from Secrets Manager on demand, provide a secret name,
+        # or set the env var SECRET_NAME. (We do NOT resolve it at import time.)
         secret_name: Optional[str] = None,
+        # Custom token provider for advanced cases; signature: () -> str
         token_provider: Optional[Callable[[], str]] = None,
     ) -> None:
-        self._meta_api = meta_api
+        self._meta_api = meta_api  # can be a ready-to-use instance or None (lazy)
         self._explicit_token = auth_token
         self._secret_name = secret_name or os.environ.get("SECRET_NAME", "")
         self._token_provider = token_provider
@@ -80,12 +103,14 @@ class SendMessage:
             }
         )
 
-    # -----------------------------------------------------------------------
-    # Public API
-    # -----------------------------------------------------------------------
+    # ---------- Public API (kept minimal & mockable) ----------
 
     def send_text(self, to_phone: str, text: str) -> Dict[str, Any]:
-        """Send a plain text WhatsApp message."""
+        """
+        Send a plain text WhatsApp message.
+        This will lazily resolve MetaAPI + token on first use.
+        """
+
         meta = self._ensure_meta_api()
         payload = {"to": to_phone, "type": "text", "text": {"body": text}}
         logger.debug({"message": "Sending text", "to": to_phone, "payload": payload})
@@ -98,7 +123,10 @@ class SendMessage:
         language_code: str = "en_US",
         components: Optional[list] = None,
     ) -> Dict[str, Any]:
-        """Send a WhatsApp template message."""
+        """
+        Send a WhatsApp template message.
+        """
+
         meta = self._ensure_meta_api()
         payload = {
             "to": to_phone,
@@ -127,11 +155,14 @@ class SendMessage:
         to_phone: str,
         media_id: Optional[str] = None,
         media_link: Optional[str] = None,
-        media_type: str = "image",
+        media_type: str = "image",  # "image" | "audio" | "video" | "document"
         caption: Optional[str] = None,
         filename: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Send a media message by ID or public link."""
+        """
+        Send a media message by ID or public link.
+        """
+
         if not media_id and not media_link:
             raise ValueError("Either media_id or media_link must be provided")
 
@@ -161,16 +192,20 @@ class SendMessage:
         )
         return meta.send_message(payload)
 
-    # -----------------------------------------------------------------------
-    # Internals
-    # -----------------------------------------------------------------------
+    # ---------- Internals ----------
 
     def _ensure_meta_api(self):
-        """Lazily construct the MetaAPI dependency with a valid auth token."""
+        """
+        Lazily construct the MetaAPI dependency with a valid auth token.
+        We import MetaAPI only here to avoid import-time side effects for tests.
+        """
+
         if self._meta_api is not None:
             return self._meta_api
 
         token = self._resolve_token()
+
+        # Import here so simply importing SendMessage doesn't drag in integrations
         from ..integrations.meta.api_requests import MetaAPI  # local import, lazy
 
         self._meta_api = self._meta_api_factory(MetaAPI, token)
@@ -180,10 +215,13 @@ class SendMessage:
     def _resolve_token(self) -> str:
         """
         Resolve the auth token in this priority:
-        1. Explicit token passed to constructor
-        2. Custom token_provider()
-        3. Secret read from Secrets Manager (secret_name or env SECRET_NAME)
+        1) Explicit token passed to constructor
+        2) Custom token_provider()
+        3) Secret read from Secrets Manager using provided secret name (or env SECRET_NAME)
+
+        Nothing is fetched until this method is called.
         """
+
         if self._explicit_token:
             return self._explicit_token
 
@@ -212,5 +250,8 @@ class SendMessage:
 
 
 def _default_meta_api_factory(MetaAPICls, token: str):
-    """Factory to build MetaAPI (split out for easy mocking)."""
+    """
+    Factory to build MetaAPI. Split out for easy mocking in unit tests.
+    """
+
     return MetaAPICls(auth_token=token)
