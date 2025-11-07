@@ -11,7 +11,7 @@ import requests
 # Own imports
 from common.helpers.secrets_helper import SecretsHelper
 from common.logger import custom_logger
-from state_machine.integrations.meta.api_utils import (
+from .api_utils import (
     get_api_endpoint,
     get_api_headers,
 )
@@ -53,6 +53,9 @@ class MetaAPI:
         self.logger.debug("Loading Meta configurations from Secrets Manager...")
         self.meta_secret_json = self.secrets_helper.get_secret_value()
         _meta_token = self.meta_secret_json.get("META_TOKEN")
+        if not _meta_token:
+            raise RuntimeError("META_TOKEN is missing from the WhatsApp secret")
+
         _meta_from_phone_number_id = self.meta_secret_json.get(
             "META_FROM_PHONE_NUMBER_ID"
         )
@@ -79,6 +82,11 @@ class MetaAPI:
         :param to_phone_number (str): Phone number to send the message to.
         :param original_message_id (str): Original message ID to reply to.
         """
+
+        if not self.api_headers or not self.api_endpoint:
+            raise RuntimeError(
+                "Meta API configuration is incomplete; ensure secrets are available"
+            )
 
         self.logger.info(f"Starting POST request to Meta API: {self.api_endpoint}")
         self.logger.debug(f"Headers to send: {self.api_headers}")
