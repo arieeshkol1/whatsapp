@@ -112,7 +112,8 @@ def _extract_customer_details(state: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _update_customer_details(
-    phone_number: Optional[str], state: Dict[str, Any]
+    phone_number: Optional[str],
+    state: Dict[str, Any],
 ) -> None:
     if not state:
         return
