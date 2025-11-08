@@ -69,7 +69,6 @@ def extract_state_updates_from_message(message: Optional[str]) -> Dict[str, Any]
     if not text:
         return {}
 
-    lowered = text.lower()
     updates: Dict[str, Any] = {}
 
     if "18" in text or "גיל" in text:
