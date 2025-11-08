@@ -1,6 +1,10 @@
 # Own imports
 import os
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
@@ -24,6 +28,7 @@ logger = custom_logger()
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
+USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
 
 _history_helper = (
     DynamoDBHelper(table_name=DYNAMODB_TABLE, endpoint_url=ENDPOINT_URL)
@@ -31,8 +36,125 @@ _history_helper = (
     else None
 )
 
+_users_info_table = None
+
 
 MAX_SESSION_ID_LENGTH = 256
+
+
+def _normalize_phone(number: Optional[str]) -> Optional[str]:
+    if not number:
+        return None
+    stripped = str(number).strip()
+    if not stripped:
+        return None
+    if stripped.startswith("+"):
+        return stripped
+    if stripped[0].isdigit():
+        return f"+{stripped}"
+    return stripped
+
+
+def _get_users_info_table():
+    global _users_info_table
+
+    if _users_info_table is not None:
+        return _users_info_table
+
+    if not USER_INFO_TABLE_NAME:
+        return None
+
+    try:
+        resource = boto3.resource("dynamodb", endpoint_url=ENDPOINT_URL)
+        _users_info_table = resource.Table(USER_INFO_TABLE_NAME)
+    except Exception:  # pragma: no cover - defensive guard
+        logger.exception("Failed to initialise UsersInfo DynamoDB table handle")
+        _users_info_table = None
+
+    return _users_info_table
+
+
+def _touch_user_info_record(phone_number: Optional[str]) -> None:
+    table = _get_users_info_table()
+    normalized = _normalize_phone(phone_number)
+    if not table or not normalized:
+        return
+
+    try:
+        table.update_item(
+            Key={"PhoneNumber": normalized},
+            UpdateExpression="SET Details = if_not_exists(Details, :empty), LastSeenAt = :now",
+            ExpressionAttributeValues={
+                ":empty": {},
+                ":now": datetime.utcnow().isoformat(),
+            },
+        )
+    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
+        logger.exception("Failed to ensure UsersInfo record exists")
+
+
+def _extract_customer_details(state: Dict[str, Any]) -> Dict[str, str]:
+    details: Dict[str, str] = {}
+    candidates = {
+        "first_name": ["customer_first_name", "first_name"],
+        "last_name": ["customer_last_name", "last_name"],
+        "email_address": ["customer_email", "email", "email_address"],
+    }
+
+    for canonical, keys in candidates.items():
+        for key in keys:
+            value = state.get(key)
+            if value:
+                details[canonical] = value
+                break
+
+    return details
+
+
+def _update_user_info_details(
+    phone_number: Optional[str],
+    state: Dict[str, Any],
+) -> None:
+    if not state:
+        return
+
+    table = _get_users_info_table()
+    normalized = _normalize_phone(phone_number)
+    if not table or not normalized:
+        return
+
+    attributes = _extract_customer_details(state)
+    if not attributes:
+        return
+
+    expression_names = {"#details": "Details"}
+    expression_values: Dict[str, Any] = {
+        ":empty": {},
+        ":now": datetime.utcnow().isoformat(),
+    }
+    set_fragments = [
+        "#details = if_not_exists(#details, :empty)",
+        "LastSeenAt = :now",
+    ]
+
+    for index, (key, value) in enumerate(attributes.items()):
+        name_token = f"#field{index}"
+        value_token = f":value{index}"
+        expression_names[name_token] = key
+        expression_values[value_token] = value
+        set_fragments.append(f"#details.{name_token} = {value_token}")
+
+    update_expression = "SET " + ", ".join(set_fragments)
+
+    try:
+        table.update_item(
+            Key={"PhoneNumber": normalized},
+            UpdateExpression=update_expression,
+            ExpressionAttributeNames=expression_names,
+            ExpressionAttributeValues=expression_values,
+        )
+    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
+        logger.exception("Failed to update UsersInfo details")
 
 
 def _build_session_id(
@@ -120,6 +242,8 @@ class ProcessText(BaseStepFunction):
             "whatsapp_id", {}
         ).get("S", "")
 
+        _touch_user_info_record(from_number)
+
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
 
@@ -166,6 +290,8 @@ class ProcessText(BaseStepFunction):
                     logger.exception("Failed to persist conversation state")
 
         order_progress_summary = format_order_progress_summary(conversation_state)
+
+        _update_user_info_details(from_number, conversation_state)
 
         self.logger.info(
             "Prepared conversation context",
