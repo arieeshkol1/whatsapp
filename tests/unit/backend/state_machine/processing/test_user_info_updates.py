@@ -27,20 +27,25 @@ def fake_table(monkeypatch):
     return table
 
 
-def test_touch_user_info_record_initialises_details(fake_table):
+def test_touch_user_info_record_initialises_profile(fake_table):
     process_text_module._touch_user_info_record("9725", 1700000000)
 
     assert fake_table.calls, "update_item should be invoked"
     call: Dict[str, Any] = fake_table.calls[0]
 
     assert call["Key"] == {"PhoneNumber": "+9725"}
-    assert "Details = if_not_exists(Details, :empty)" in call["UpdateExpression"]
+    update_expression = call["UpdateExpression"]
+    assert "profile = if_not_exists(profile, :empty)" in update_expression
+    assert (
+        "collected_fields = if_not_exists(collected_fields, :empty)"
+        in update_expression
+    )
     assert call["ExpressionAttributeValues"][":last_seen"] == decimal.Decimal(
         "1700000000"
     )
 
 
-def test_update_user_info_profile_sets_details_map(fake_table):
+def test_update_user_info_profile_sets_profile_map(fake_table):
     process_text_module._update_user_info_profile(
         phone_number="972542804535",
         updates={"first_name": "Dana", "email": "dana@example.com"},
@@ -52,8 +57,8 @@ def test_update_user_info_profile_sets_details_map(fake_table):
 
     assert call["Key"] == {"PhoneNumber": "+972542804535"}
     update_expression = call["UpdateExpression"]
-    # Ensure both Details and Profile maps receive the values
-    assert "#details.#field0 = :value0" in update_expression
+    # Ensure both profile and collected_fields maps receive the values
     assert "#profile.#field0 = :value0" in update_expression
-    assert call["ExpressionAttributeNames"]["#details"] == "Details"
+    assert "#collected.#field0 = :true" in update_expression
+    assert call["ExpressionAttributeNames"]["#collected"] == "collected_fields"
     assert call["ExpressionAttributeValues"][":value1"] == "dana@example.com"

@@ -109,14 +109,15 @@ def _touch_user_info_record(
         table.update_item(
             Key={"PhoneNumber": normalized},
             UpdateExpression=(
-                "SET Profile = if_not_exists(Profile, :empty), "
-                "Details = if_not_exists(Details, :empty), "
-                "CollectedFields = if_not_exists(CollectedFields, :empty), "
-                "LastSeenAt = :last_seen"
+                "SET profile = if_not_exists(profile, :empty), "
+                "collected_fields = if_not_exists(collected_fields, :empty), "
+                "updated_at = :updated_at, "
+                "last_seen_at = :last_seen"
             ),
             ExpressionAttributeValues={
                 ":empty": {},
                 ":last_seen": _as_epoch_decimal(last_seen_at),
+                ":updated_at": datetime.utcnow().isoformat(),
             },
         )
     except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
@@ -170,9 +171,8 @@ def _update_user_info_profile(
         return
 
     expression_names = {
-        "#profile": "Profile",
-        "#details": "Details",
-        "#collected": "CollectedFields",
+        "#profile": "profile",
+        "#collected": "collected_fields",
     }
     expression_values: Dict[str, Any] = {
         ":empty": {},
@@ -182,10 +182,9 @@ def _update_user_info_profile(
     }
     set_fragments = [
         "#profile = if_not_exists(#profile, :empty)",
-        "#details = if_not_exists(#details, :empty)",
         "#collected = if_not_exists(#collected, :empty)",
-        "UpdatedAt = :updated_at",
-        "LastSeenAt = :last_seen",
+        "updated_at = :updated_at",
+        "last_seen_at = :last_seen",
     ]
 
     for index, (key, value) in enumerate(cleaned_updates.items()):
@@ -194,7 +193,6 @@ def _update_user_info_profile(
         expression_names[name_token] = key
         expression_values[value_token] = value
         set_fragments.append(f"#profile.{name_token} = {value_token}")
-        set_fragments.append(f"#details.{name_token} = {value_token}")
         set_fragments.append(f"#collected.{name_token} = :true")
 
     update_expression = "SET " + ", ".join(set_fragments)
@@ -356,8 +354,6 @@ class ProcessText(BaseStepFunction):
 
         _touch_user_info_record(from_number, last_seen_at)
 
-        _touch_user_info_record(from_number)
-
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
 
@@ -400,8 +396,6 @@ class ProcessText(BaseStepFunction):
         order_progress_summary_for_prompt = format_order_progress_summary(
             conversation_state
         )
-
-        _update_user_info_details(from_number, conversation_state)
 
         self.logger.info(
             "Prepared conversation context",
