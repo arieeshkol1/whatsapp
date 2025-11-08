@@ -13,7 +13,9 @@ CLASS_MODULE_MAP = {
     "SendMessage": "state_machine.processing.send_message",
     "ProcessText": "state_machine.processing.process_text",
     "ProcessVoice": "state_machine.processing.process_voice",
+    "Adapter": "state_machine.processing.adapter",
     "ValidateMessage": "state_machine.processing.validate_message",
+    "AssessChanges": "state_machine.processing.assess_changes",
     "Success": "state_machine.utils.success",
     "Failure": "state_machine.utils.failure",
 }
