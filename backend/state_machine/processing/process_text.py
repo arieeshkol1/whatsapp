@@ -1,10 +1,6 @@
 # Own imports
 import os
-from datetime import datetime
 from typing import Any, Dict, List, Optional
-
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
 
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
@@ -28,7 +24,6 @@ logger = custom_logger()
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
-CUSTOMERS_TABLE_NAME = os.environ.get("CUSTOMERS_TABLE_NAME")
 
 _history_helper = (
     DynamoDBHelper(table_name=DYNAMODB_TABLE, endpoint_url=ENDPOINT_URL)
@@ -36,125 +31,8 @@ _history_helper = (
     else None
 )
 
-_customers_table = None
-
 
 MAX_SESSION_ID_LENGTH = 256
-
-
-def _normalize_phone(number: Optional[str]) -> Optional[str]:
-    if not number:
-        return None
-    stripped = str(number).strip()
-    if not stripped:
-        return None
-    if stripped.startswith("+"):
-        return stripped
-    if stripped[0].isdigit():
-        return f"+{stripped}"
-    return stripped
-
-
-def _get_customers_table():
-    global _customers_table
-
-    if _customers_table is not None:
-        return _customers_table
-
-    if not CUSTOMERS_TABLE_NAME:
-        return None
-
-    try:
-        resource = boto3.resource("dynamodb", endpoint_url=ENDPOINT_URL)
-        _customers_table = resource.Table(CUSTOMERS_TABLE_NAME)
-    except Exception:  # pragma: no cover - defensive guard
-        logger.exception("Failed to initialise Customers DynamoDB table handle")
-        _customers_table = None
-
-    return _customers_table
-
-
-def _touch_customer_record(phone_number: Optional[str]) -> None:
-    table = _get_customers_table()
-    normalized = _normalize_phone(phone_number)
-    if not table or not normalized:
-        return
-
-    try:
-        table.update_item(
-            Key={"PK": normalized},
-            UpdateExpression="SET attributes = if_not_exists(attributes, :empty), last_seen_at = :now",
-            ExpressionAttributeValues={
-                ":empty": {},
-                ":now": datetime.utcnow().isoformat(),
-            },
-        )
-    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to ensure customer record exists")
-
-
-def _extract_customer_details(state: Dict[str, Any]) -> Dict[str, str]:
-    details: Dict[str, str] = {}
-    candidates = {
-        "first_name": ["customer_first_name", "first_name"],
-        "last_name": ["customer_last_name", "last_name"],
-        "email_address": ["customer_email", "email", "email_address"],
-    }
-
-    for canonical, keys in candidates.items():
-        for key in keys:
-            value = state.get(key)
-            if value:
-                details[canonical] = value
-                break
-
-    return details
-
-
-def _update_customer_details(
-    phone_number: Optional[str],
-    state: Dict[str, Any],
-) -> None:
-    if not state:
-        return
-
-    table = _get_customers_table()
-    normalized = _normalize_phone(phone_number)
-    if not table or not normalized:
-        return
-
-    attributes = _extract_customer_details(state)
-    if not attributes:
-        return
-
-    expression_names = {"#attr": "attributes"}
-    expression_values: Dict[str, Any] = {
-        ":empty": {},
-        ":now": datetime.utcnow().isoformat(),
-    }
-    set_fragments = [
-        "#attr = if_not_exists(#attr, :empty)",
-        "last_seen_at = :now",
-    ]
-
-    for index, (key, value) in enumerate(attributes.items()):
-        name_token = f"#field{index}"
-        value_token = f":value{index}"
-        expression_names[name_token] = key
-        expression_values[value_token] = value
-        set_fragments.append(f"#attr.{name_token} = {value_token}")
-
-    update_expression = "SET " + ", ".join(set_fragments)
-
-    try:
-        table.update_item(
-            Key={"PK": normalized},
-            UpdateExpression=update_expression,
-            ExpressionAttributeNames=expression_names,
-            ExpressionAttributeValues=expression_values,
-        )
-    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to update customer details")
 
 
 def _build_session_id(
@@ -242,8 +120,6 @@ class ProcessText(BaseStepFunction):
             "whatsapp_id", {}
         ).get("S", "")
 
-        _touch_customer_record(from_number)
-
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
 
@@ -290,8 +166,6 @@ class ProcessText(BaseStepFunction):
                     logger.exception("Failed to persist conversation state")
 
         order_progress_summary = format_order_progress_summary(conversation_state)
-
-        _update_customer_details(from_number, conversation_state)
 
         self.logger.info(
             "Prepared conversation context",
