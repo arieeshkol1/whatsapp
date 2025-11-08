@@ -124,6 +124,30 @@ class ChatbotAPIStack(Stack):
         )
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
 
+        self.customers_table = aws_dynamodb.Table(
+            self,
+            "DynamoDB-Table-Customers",
+            table_name="Customers",
+            partition_key=aws_dynamodb.Attribute(
+                name="PK", type=aws_dynamodb.AttributeType.STRING
+            ),
+            billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        Tags.of(self.customers_table).add("Name", "Customers")
+
+        self.users_info_table = aws_dynamodb.Table(
+            self,
+            "DynamoDB-Table-UsersInfo",
+            table_name="UsersInfo",
+            partition_key=aws_dynamodb.Attribute(
+                name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
+            ),
+            billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        Tags.of(self.users_info_table).add("Name", "UsersInfo")
+
     def create_lambda_layers(self) -> None:
         """
         Create the Lambda layers that are necessary for the additional runtime
@@ -227,6 +251,12 @@ class ChatbotAPIStack(Stack):
         self.dynamodb_table.grant_read_write_data(
             self.lambda_state_machine_process_message
         )
+        self.customers_table.grant_read_write_data(
+            self.lambda_state_machine_process_message
+        )
+        self.users_info_table.grant_read_write_data(
+            self.lambda_state_machine_process_message
+        )
         if self.rules_dynamodb_table:
             self.rules_dynamodb_table.grant_read_data(
                 self.lambda_state_machine_process_message
@@ -305,6 +335,7 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
+            "CUSTOMERS_TABLE_NAME": self.customers_table.table_name,
         }
 
         for key, value in optional_values.items():
@@ -722,6 +753,7 @@ class ChatbotAPIStack(Stack):
                 ),
             ],
         )
+        self.users_info_table.grant_read_write_data(bedrock_agent_role)
         # Add additional IAM actions for the bedrock agent
         bedrock_agent_role.add_to_policy(
             aws_iam.PolicyStatement(
