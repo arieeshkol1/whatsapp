@@ -261,6 +261,27 @@ class ChatbotAPIStack(Stack):
             self.rules_dynamodb_table.grant_read_data(
                 self.lambda_state_machine_process_message
             )
+        dynamodb_actions = [
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem",
+            "dynamodb:DescribeTable",
+        ]
+        self.lambda_state_machine_process_message.add_to_role_policy(
+            aws_iam.PolicyStatement(
+                effect=aws_iam.Effect.ALLOW,
+                actions=dynamodb_actions,
+                resources=[self.users_info_table.table_arn],
+            )
+        )
+        if self.rules_dynamodb_table:
+            self.lambda_state_machine_process_message.add_to_role_policy(
+                aws_iam.PolicyStatement(
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=dynamodb_actions,
+                    resources=[self.rules_dynamodb_table.table_arn],
+                )
+            )
         self.lambda_state_machine_process_message.role.add_managed_policy(
             aws_iam.ManagedPolicy.from_aws_managed_policy_name(
                 "AmazonSSMReadOnlyAccess",
@@ -328,6 +349,12 @@ class ChatbotAPIStack(Stack):
             "LOG_LEVEL": self.app_config["log_level"],
             "SECRET_NAME": self.app_config["secret_name"],
             "META_ENDPOINT": self.app_config["meta_endpoint"],
+            "ASSESS_CHANGES_FEATURE": self.app_config.get(
+                "ASSESS_CHANGES_FEATURE", "off"
+            ),
+            "USER_INFO_TABLE": self.app_config.get(
+                "USER_INFO_TABLE", self.users_info_table.table_name
+            ),
         }
 
         optional_values: Dict[str, Optional[str]] = {
@@ -351,6 +378,11 @@ class ChatbotAPIStack(Stack):
         for key, value in optional_rules_environment.items():
             if value:
                 base_environment[key] = value
+
+        if self.app_config.get("RULES_TABLE"):
+            base_environment["RULES_TABLE"] = self.app_config["RULES_TABLE"]
+        elif self.rules_dynamodb_table:
+            base_environment["RULES_TABLE"] = self.rules_dynamodb_table.table_name
 
         return base_environment
 
@@ -1020,7 +1052,17 @@ class ChatbotAPIStack(Stack):
             # Amazon Nova Lite model configured for fast, high-quality responses.
             foundation_model=self.bedrock_agent_effective_foundation_model_id,
             instruction="""
-אתה "חביתוש – הסוכן הדיגיטלי להזמנות בירה טרייה מהחבית". דבר תמיד בעברית חמה, מזמינה, מקצועית ושקופה.
+אתה "חביתוש – הסוכן הדיגיטלי להזמנות בירה טרייה מהחבית". דבר תמיד בעברית חמה ומזמינה וסייע ללקוחות להזמין שירותים או חבילות בהתאם לכללים הבאים:
+
+1. שלבי שיחה חובה עם לקוח:
+   • וידוא גיל: שאל פעם אחת אם כל המשתתפים מעל גיל 18. אם התשובה חיובית (כן או ביטוי מאשר אחר) המשך מיד לשלב הבא; אם התשובה שלילית – הודע "מצטער, לא ניתן לבצע הזמנה אם אחד מהמשתתפים מתחת לגיל 18" וסיים בנימוס.
+   • פרטי המזמין: אסוף שם פרטי ושם משפחה, ובכל פעם שאתה מקבל אותם או כתובת דוא"ל עדכן את conversation_state_updates עם המפתחות customer_first_name, customer_last_name ו-customer_email.
+   • פרטי חברה: אסוף שם חברה וכתובת מלאה.
+   • תאריך האירוע: ודא שהתאריך לפחות 3 ימים מהיום (שעון ישראל). אם פחות – הודע "לא ניתן לבצע הזמנה תוך פחות מ-3 ימים מראש" וסיים בנימוס.
+   • מספר משתתפים: לאחר קבלת הכמות, הפנה לפי הכללים הבאים:
+       - פחות מ-60 משתתפים: שלח קישור להזמנה רגילה באתר https://www.havitush.co.il.
+       - בין 61 ל-120 משתתפים: הצע שירות עצמי וחישב מחיר = מספר משתתפים × 100 ₪.
+       - מעל 121 משתתפים: הצע עמדה מאוישת וחישב מחיר = מספר משתתפים × 80 ₪.
 
 בכל מסר ללקוח חזור קודם כל על כל פרטי הלקוח הידועים לך (שם פרטי, שם משפחה, טלפון, חברה) ואז על פרטי ההזמנה הנוכחית. אם הלקוח מקליד את הקוד "חביתוש123" עצור את התהליך הנוכחי ועבור לתפריט "חביתוש": ברך את חביתוש בנימוס, שאל מה ברצונו לבצע והצע גישה לשאילתות על בסיס הנתונים עבור לקוחות, הזמנות ושלבי התהליך. במצב זה עליך לאפשר לחביתוש לשוחח באופן חופשי, לענות על שאלות עומק לגבי הנתונים (לדוגמה: כמה מנויים ייחודיים קיימים) ולהחזיר תשובות ברורות ומבוססות נתונים.
 
