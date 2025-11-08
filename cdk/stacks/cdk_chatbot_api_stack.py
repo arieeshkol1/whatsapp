@@ -836,9 +836,7 @@ class ChatbotAPIStack(Stack):
         # self.task_process_failure.next(self.task_failure)
 
         # Conditions and definition for the V2 state machine (includes Assess Changes step).
-        self.choice_text_v2 = aws_sfn.Condition.string_equals(
-            "$.message_type", "text"
-        )
+        self.choice_text_v2 = aws_sfn.Condition.string_equals("$.message_type", "text")
         self.choice_image_v2 = aws_sfn.Condition.string_equals(
             "$.message_type", "image"
         )
