@@ -1,6 +1,7 @@
 # Own imports
 import os
 from datetime import datetime
+from html import unescape
 from typing import Any, Dict, List, Optional
 
 import boto3
@@ -331,10 +332,12 @@ class ProcessText(BaseStepFunction):
             fallback=self.correlation_id,
         )
 
-        self.response_message = call_bedrock_agent(
+        raw_response = call_bedrock_agent(
             session_id=session_identifier,
             input_text=input_text,
         )
+
+        self.response_message = unescape(raw_response or "")
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
