@@ -102,3 +102,18 @@ def test_state_machine_lambda_has_dynamodb_permissions():
             }
         ),
     )
+
+
+def test_two_state_machines_defined():
+    resources = template.find_resources(
+        type="AWS::StepFunctions::StateMachine",
+    )
+    assert len(resources) == 2
+
+    names = {
+        resource["Properties"].get("StateMachineName")
+        for resource in resources.values()
+        if resource["Properties"].get("StateMachineName")
+    }
+    assert any(name.endswith("process-message") for name in names)
+    assert any(name.endswith("process-message-v2") for name in names)

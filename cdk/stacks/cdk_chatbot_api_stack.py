@@ -629,6 +629,172 @@ class ChatbotAPIStack(Stack):
             comment="State Machine Exception or Failure",
         )
 
+        # Duplicate tasks for the V2 state machine so both definitions can coexist.
+        self.v2_task_validate_message = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-ValidateMessage",
+            state_name="Validate Message",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "ValidateMessage",
+                        "method_name": "validate_input",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
+        self.v2_task_pass_text = aws_sfn.Pass(
+            self,
+            "TaskV2-Text",
+            comment="Indicates that the message type is Text",
+            state_name="Text",
+        )
+
+        self.v2_task_pass_voice = aws_sfn.Pass(
+            self,
+            "TaskV2-Voice",
+            comment="Indicates that the message type is Voice",
+            state_name="Voice",
+        )
+
+        self.v2_task_pass_image = aws_sfn.Pass(
+            self,
+            "TaskV2-Image",
+            comment="Indicates that the message type is Image",
+            state_name="Image",
+        )
+
+        self.v2_task_pass_video = aws_sfn.Pass(
+            self,
+            "TaskV2-Video",
+            comment="Indicates that the message type is Video",
+            state_name="Video",
+        )
+
+        self.v2_task_assess_changes = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-AssessChanges",
+            state_name="Assess Changes",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "AssessChanges",
+                        "method_name": "assess_changes",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
+        self.v2_task_process_text = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-ProcessText",
+            state_name="Process Text",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "ProcessText",
+                        "method_name": "process_text",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
+        self.v2_task_process_voice = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-ProcessVoice",
+            state_name="Process Voice",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "ProcessVoice",
+                        "method_name": "process_voice",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
+        self.v2_task_send_message = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-SendMessage",
+            state_name="Send Message",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "SendMessage",
+                        "method_name": "send_message",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
+        self.v2_task_not_implemented = aws_sfn.Pass(
+            self,
+            "TaskV2-NotImplemented",
+            comment="Not implemented yet",
+        )
+
+        self.v2_task_process_success = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-Success",
+            state_name="Process Success",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "Success",
+                        "method_name": "process_success",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
+        self.v2_task_process_failure = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-Failure",
+            state_name="Process Failure",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "Failure",
+                        "method_name": "process_failure",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
+        self.v2_task_success = aws_sfn.Succeed(
+            self,
+            id="SucceedV2",
+            comment="Successful execution of State Machine V2",
+        )
+
+        self.v2_task_failure = aws_sfn.Fail(
+            self,
+            id="ExceptionHandlingFinishedV2",
+            comment="State Machine V2 Exception or Failure",
+        )
+
     def create_state_machine_definition(self) -> None:
         """
         Method to create the Step Function State Machine definition.
@@ -669,6 +835,52 @@ class ChatbotAPIStack(Stack):
         # TODO: Add failure handling for the State Machine with "process_failure"
         # self.task_process_failure.next(self.task_failure)
 
+        # Conditions and definition for the V2 state machine (includes Assess Changes step).
+        self.choice_text_v2 = aws_sfn.Condition.string_equals("$.message_type", "text")
+        self.choice_image_v2 = aws_sfn.Condition.string_equals("$.message_type", "image")
+        self.choice_video_v2 = aws_sfn.Condition.string_equals("$.message_type", "video")
+        self.choice_voice_v2 = aws_sfn.Condition.string_equals("$.message_type", "voice")
+        self.assess_changes_enabled_condition = aws_sfn.Condition.string_equals(
+            "$.features.assess_changes",
+            "on",
+        )
+
+        self.state_machine_definition_v2 = self.v2_task_validate_message.next(
+            aws_sfn.Choice(self, "Message Type? V2")
+            .when(self.choice_text_v2, self.v2_task_pass_text)
+            .when(self.choice_voice_v2, self.v2_task_pass_voice)
+            .when(self.choice_image_v2, self.v2_task_pass_image)
+            .when(self.choice_video_v2, self.v2_task_pass_video)
+        )
+
+        self.v2_choice_assess_changes = aws_sfn.Choice(
+            self,
+            "Assess Changes Enabled?",
+            comment="Routes through AssessChanges when feature flag is enabled",
+        )
+        self.v2_choice_assess_changes.when(
+            self.assess_changes_enabled_condition,
+            self.v2_task_assess_changes.next(self.v2_task_process_text),
+        )
+        self.v2_choice_assess_changes.otherwise(self.v2_task_process_text)
+
+        self.v2_task_pass_text.next(self.v2_choice_assess_changes)
+
+        self.v2_task_process_text.next(self.v2_task_send_message)
+
+        self.v2_task_pass_voice.next(self.v2_task_process_voice.next(self.v2_task_pass_text))
+        self.v2_task_pass_image.next(self.v2_task_not_implemented)
+        self.v2_task_pass_video.next(self.v2_task_not_implemented)
+
+        self.v2_task_not_implemented.next(self.v2_task_send_message)
+
+        self.v2_task_send_message.next(self.v2_task_process_success)
+
+        self.v2_task_process_success.next(self.v2_task_success)
+
+        # TODO: Add failure handling for the State Machine with "process_failure" in V2 as well
+        # self.v2_task_process_failure.next(self.v2_task_failure)
+
     def create_state_machine(self) -> None:
         """
         Method to create the Step Function State Machine for processing the messages.
@@ -704,6 +916,33 @@ class ChatbotAPIStack(Stack):
         self.lambda_trigger_state_machine.add_environment(
             "STATE_MACHINE_ARN",
             self.state_machine.state_machine_arn,
+        )
+
+        log_group_name_v2 = (
+            f"/aws/vendedlogs/states/{self.main_resources_name}-process-message-v2"
+        )
+        self.state_machine_log_group_v2 = aws_logs.LogGroup(
+            self,
+            "StateMachine-LogGroupV2",
+            log_group_name=log_group_name_v2,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        Tags.of(self.state_machine_log_group_v2).add("Name", log_group_name_v2)
+
+        self.state_machine_v2 = aws_sfn.StateMachine(
+            self,
+            "StateMachine-ProcessMessageV2",
+            state_machine_name=f"{self.main_resources_name}-process-message-v2",
+            state_machine_type=aws_sfn.StateMachineType.EXPRESS,
+            definition_body=aws_sfn.DefinitionBody.from_chainable(
+                self.state_machine_definition_v2,
+            ),
+            logs=aws_sfn.LogOptions(
+                destination=self.state_machine_log_group_v2,
+                include_execution_data=True,
+                level=aws_sfn.LogLevel.ALL,
+            ),
+            role=self.state_machine.role,
         )
 
     def create_bedrock_components(self) -> None:
