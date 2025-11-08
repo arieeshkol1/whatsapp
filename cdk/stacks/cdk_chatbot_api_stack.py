@@ -836,10 +836,18 @@ class ChatbotAPIStack(Stack):
         # self.task_process_failure.next(self.task_failure)
 
         # Conditions and definition for the V2 state machine (includes Assess Changes step).
-        self.choice_text_v2 = aws_sfn.Condition.string_equals("$.message_type", "text")
-        self.choice_image_v2 = aws_sfn.Condition.string_equals("$.message_type", "image")
-        self.choice_video_v2 = aws_sfn.Condition.string_equals("$.message_type", "video")
-        self.choice_voice_v2 = aws_sfn.Condition.string_equals("$.message_type", "voice")
+        self.choice_text_v2 = aws_sfn.Condition.string_equals(
+            "$.message_type", "text"
+        )
+        self.choice_image_v2 = aws_sfn.Condition.string_equals(
+            "$.message_type", "image"
+        )
+        self.choice_video_v2 = aws_sfn.Condition.string_equals(
+            "$.message_type", "video"
+        )
+        self.choice_voice_v2 = aws_sfn.Condition.string_equals(
+            "$.message_type", "voice"
+        )
         self.assess_changes_enabled_condition = aws_sfn.Condition.string_equals(
             "$.features.assess_changes",
             "on",
@@ -868,7 +876,9 @@ class ChatbotAPIStack(Stack):
 
         self.v2_task_process_text.next(self.v2_task_send_message)
 
-        self.v2_task_pass_voice.next(self.v2_task_process_voice.next(self.v2_task_pass_text))
+        self.v2_task_pass_voice.next(
+            self.v2_task_process_voice.next(self.v2_task_pass_text)
+        )
         self.v2_task_pass_image.next(self.v2_task_not_implemented)
         self.v2_task_pass_video.next(self.v2_task_not_implemented)
 
