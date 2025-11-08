@@ -356,6 +356,8 @@ class ProcessText(BaseStepFunction):
 
         _touch_user_info_record(from_number, last_seen_at)
 
+        _touch_user_info_record(from_number)
+
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
 
@@ -398,6 +400,8 @@ class ProcessText(BaseStepFunction):
         order_progress_summary_for_prompt = format_order_progress_summary(
             conversation_state
         )
+
+        _update_user_info_details(from_number, conversation_state)
 
         self.logger.info(
             "Prepared conversation context",
