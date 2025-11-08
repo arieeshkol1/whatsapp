@@ -24,7 +24,10 @@
         "bedrock_agent_id": "3UEECXPUFI",
         "bedrock_agent_alias_id": "TSTALIASID",
         "bedrock_agent_foundation_model_id": "amazon.nova-lite-v1:0",
-        "bedrock_agent_inference_profile_arn": null
+        "bedrock_agent_inference_profile_arn": null,
+        "ASSESS_CHANGES_FEATURE": "off",
+        "USER_INFO_TABLE": "UsersInfo",
+        "RULES_TABLE": "aws-whatsapp-rules-dev"
       },
       "prod": {
         "deployment_environment": "prod",
@@ -42,7 +45,10 @@
         "bedrock_agent_id": null,
         "bedrock_agent_alias_id": null,
         "bedrock_agent_foundation_model_id": "amazon.nova-lite-v1:0",
-        "bedrock_agent_inference_profile_arn": null
+        "bedrock_agent_inference_profile_arn": null,
+        "ASSESS_CHANGES_FEATURE": "off",
+        "USER_INFO_TABLE": "UsersInfo",
+        "RULES_TABLE": "aws-whatsapp-rules-prod"
       }
     }
   }

@@ -25,6 +25,9 @@ stack: ChatbotAPIStack = ChatbotAPIStack(
         "secret_name": "test-secret",
         "enable_rag": True,
         "meta_endpoint": "https://fake-endpoint.com",
+        "ASSESS_CHANGES_FEATURE": "off",
+        "USER_INFO_TABLE": "UsersInfo",
+        "RULES_TABLE": "aws-whatsapp-rules-test",
     },
 )
 template: assertions.Template = assertions.Template.from_stack(stack)
@@ -53,3 +56,64 @@ def test_api_gateway_created():
         type="AWS::ApiGateway::RestApi",
     )
     assert len(match) == 1
+
+
+def test_state_machine_lambda_has_assess_changes_env_vars():
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        assertions.Match.object_like(
+            {
+                "Handler": "state_machine/state_machine_handler.lambda_handler",
+                "Environment": {
+                    "Variables": assertions.Match.object_like(
+                        {
+                            "ASSESS_CHANGES_FEATURE": "off",
+                            "USER_INFO_TABLE": "UsersInfo",
+                            "RULES_TABLE": "aws-whatsapp-rules-test",
+                        }
+                    )
+                },
+            }
+        ),
+    )
+
+
+def test_state_machine_lambda_has_dynamodb_permissions():
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        assertions.Match.object_like(
+            {
+                "PolicyDocument": {
+                    "Statement": assertions.Match.array_with(
+                        [
+                            assertions.Match.object_like(
+                                {
+                                    "Action": [
+                                        "dynamodb:GetItem",
+                                        "dynamodb:PutItem",
+                                        "dynamodb:UpdateItem",
+                                        "dynamodb:DescribeTable",
+                                    ]
+                                }
+                            )
+                        ]
+                    )
+                }
+            }
+        ),
+    )
+
+
+def test_two_state_machines_defined():
+    resources = template.find_resources(
+        type="AWS::StepFunctions::StateMachine",
+    )
+    assert len(resources) == 2
+
+    names = {
+        resource["Properties"].get("StateMachineName")
+        for resource in resources.values()
+        if resource["Properties"].get("StateMachineName")
+    }
+    assert any(name.endswith("process-message") for name in names)
+    assert any(name.endswith("process-message-v2") for name in names)
