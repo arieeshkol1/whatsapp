@@ -124,18 +124,6 @@ class ChatbotAPIStack(Stack):
         )
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
 
-        self.customers_table = aws_dynamodb.Table(
-            self,
-            "DynamoDB-Table-Customers",
-            table_name="Customers",
-            partition_key=aws_dynamodb.Attribute(
-                name="PK", type=aws_dynamodb.AttributeType.STRING
-            ),
-            billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        Tags.of(self.customers_table).add("Name", "Customers")
-
     def create_lambda_layers(self) -> None:
         """
         Create the Lambda layers that are necessary for the additional runtime
