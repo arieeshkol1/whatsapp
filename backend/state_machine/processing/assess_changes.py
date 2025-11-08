@@ -21,8 +21,3 @@ class AssessChanges:
             "AssessChanges invoked while ASSESS_CHANGES_FEATURE is disabled."
         )
         return self.event
-
-    def assess_changes(self) -> Dict[str, Any]:
-        """Backward-compatible alias for legacy dispatchers."""
-
-        return self.assess_and_apply()
