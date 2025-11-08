@@ -363,21 +363,31 @@ class SendMessage(BaseStepFunction):
             # Normalize to the same shape our _is_oauth_expired_* expects
             normalized_err = {
                 "meta_error": {
-                    "message": (pf_err.get("error") or {}).get("message")
-                    if isinstance(pf_err, dict) and "error" in pf_err
-                    else (pf_err.get("message") if isinstance(pf_err, dict) else None),
-                    "type": (pf_err.get("error") or {}).get("type")
-                    if isinstance(pf_err, dict) and "error" in pf_err
-                    else (pf_err.get("type") if isinstance(pf_err, dict) else None),
-                    "code": (pf_err.get("error") or {}).get("code")
-                    if isinstance(pf_err, dict) and "error" in pf_err
-                    else (pf_err.get("code") if isinstance(pf_err, dict) else None),
-                    "error_subcode": (pf_err.get("error") or {}).get("error_subcode")
-                    if isinstance(pf_err, dict) and "error" in pf_err
-                    else (
-                        pf_err.get("error_subcode")
-                        if isinstance(pf_err, dict)
-                        else None
+                    "message": (
+                        (pf_err.get("error") or {}).get("message")
+                        if isinstance(pf_err, dict) and "error" in pf_err
+                        else (
+                            pf_err.get("message") if isinstance(pf_err, dict) else None
+                        )
+                    ),
+                    "type": (
+                        (pf_err.get("error") or {}).get("type")
+                        if isinstance(pf_err, dict) and "error" in pf_err
+                        else (pf_err.get("type") if isinstance(pf_err, dict) else None)
+                    ),
+                    "code": (
+                        (pf_err.get("error") or {}).get("code")
+                        if isinstance(pf_err, dict) and "error" in pf_err
+                        else (pf_err.get("code") if isinstance(pf_err, dict) else None)
+                    ),
+                    "error_subcode": (
+                        (pf_err.get("error") or {}).get("error_subcode")
+                        if isinstance(pf_err, dict) and "error" in pf_err
+                        else (
+                            pf_err.get("error_subcode")
+                            if isinstance(pf_err, dict)
+                            else None
+                        )
                     ),
                 }
             }
