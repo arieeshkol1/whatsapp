@@ -18,4 +18,4 @@ def test_assess_changes_returns_event_when_disabled():
     module = _load_module()
     processor = module.AssessChanges(payload)
 
-    assert processor.assess_changes() == payload
+    assert processor.assess_and_apply() == payload

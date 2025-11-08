@@ -14,10 +14,15 @@ class AssessChanges:
         self.event: Dict[str, Any] = event or {}
         self.logger = custom_logger()
 
-    def assess_changes(self) -> Dict[str, Any]:
+    def assess_and_apply(self) -> Dict[str, Any]:
         """Return the event unchanged while the feature flag remains off."""
 
         self.logger.debug(
             "AssessChanges invoked while ASSESS_CHANGES_FEATURE is disabled."
         )
         return self.event
+
+    def assess_changes(self) -> Dict[str, Any]:
+        """Backward-compatible alias for legacy dispatchers."""
+
+        return self.assess_and_apply()

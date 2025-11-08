@@ -1,3 +1,5 @@
+import os
+
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
 
@@ -81,6 +83,10 @@ class ValidateMessage(BaseStepFunction):
         evt["conversation_id"] = conversation_id
         if text:
             evt["text"] = text
+
+        features = evt.setdefault("features", {})
+        assess_changes_flag = os.getenv("ASSESS_CHANGES_FEATURE", "off")
+        features.setdefault("assess_changes", assess_changes_flag)
 
         self.logger.info("Validation finished successfully")
         return evt

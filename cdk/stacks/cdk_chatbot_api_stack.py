@@ -685,7 +685,7 @@ class ChatbotAPIStack(Stack):
                     "event.$": "$",
                     "params": {
                         "class_name": "AssessChanges",
-                        "method_name": "assess_changes",
+                        "method_name": "assess_and_apply",
                     },
                 }
             ),
