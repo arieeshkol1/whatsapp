@@ -647,6 +647,31 @@ class ChatbotAPIStack(Stack):
         )
 
         # Duplicate tasks for the V2 state machine so both definitions can coexist.
+        self.v2_task_adapt_input = aws_sfn.Pass(
+            self,
+            "TaskV2-AdaptInput",
+            state_name="AdaptInput",
+            parameters={
+                "input.$": "$.input",
+                "dynamodb": {
+                    "NewImage": {
+                        "from_number": {
+                            "S.$": "$.input.dynamodb.NewImage.from_number.S"
+                        },
+                        "to_number": {"S.$": "$.input.dynamodb.NewImage.to_number.S"},
+                        "type": {"S.$": "$.input.dynamodb.NewImage.type.S"},
+                        "text": {"S.$": "$.input.dynamodb.NewImage.text.S"},
+                        "whatsapp_id": {
+                            "S.$": "$.input.dynamodb.NewImage.whatsapp_id.S"
+                        },
+                        "last_seen_at": {
+                            "S.$": "$.input.dynamodb.NewImage.last_seen_at.S"
+                        },
+                    }
+                },
+            },
+        )
+
         self.v2_task_adapt_message = aws_sfn_tasks.LambdaInvoke(
             self,
             "TaskV2-Adapter",
@@ -887,13 +912,15 @@ class ChatbotAPIStack(Stack):
             "on",
         )
 
-        self.state_machine_definition_v2 = self.v2_task_adapt_message.next(
-            self.v2_task_validate_message.next(
-                aws_sfn.Choice(self, "Message Type? V2")
-                .when(self.choice_text_v2, self.v2_task_pass_text)
-                .when(self.choice_voice_v2, self.v2_task_pass_voice)
-                .when(self.choice_image_v2, self.v2_task_pass_image)
-                .when(self.choice_video_v2, self.v2_task_pass_video)
+        self.state_machine_definition_v2 = self.v2_task_adapt_input.next(
+            self.v2_task_adapt_message.next(
+                self.v2_task_validate_message.next(
+                    aws_sfn.Choice(self, "Message Type? V2")
+                    .when(self.choice_text_v2, self.v2_task_pass_text)
+                    .when(self.choice_voice_v2, self.v2_task_pass_voice)
+                    .when(self.choice_image_v2, self.v2_task_pass_image)
+                    .when(self.choice_video_v2, self.v2_task_pass_video)
+                )
             )
         )
 

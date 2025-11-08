@@ -59,42 +59,6 @@ def _sanitize_execution_component(component: str, fallback: str = "NOT_FOUND") -
     return sanitized[:40]
 
 
-def _json_default(value):
-    """Serialize Decimal values so the Step Functions payload can be encoded."""
-
-    if isinstance(value, Decimal):
-        return float(value)
-    raise TypeError(f"Object of type {type(value)!r} is not JSON serializable")
-
-
-def _extract_attribute_value(attribute: Optional[Any]) -> str:
-    """Return the raw value from a DynamoDB attribute wrapper."""
-
-    if attribute is None:
-        return "NOT_FOUND"
-
-    value = getattr(attribute, "value", attribute)
-    if value is None:
-        return "NOT_FOUND"
-
-    return str(value)
-
-
-def _sanitize_execution_component(component: str, fallback: str = "NOT_FOUND") -> str:
-    """Sanitize a string so it can be used inside a Step Functions execution name."""
-
-    if not component:
-        return fallback
-
-    sanitized = re.sub(r"[^0-9A-Za-z_-]", "_", component)
-    sanitized = sanitized.strip("_")
-
-    if not sanitized:
-        return fallback
-
-    return sanitized[:40]
-
-
 def trigger_sm(record: DynamoDBRecord, logger: Logger = None) -> str:
     """
     Handler for triggering the Step Function's execution.
