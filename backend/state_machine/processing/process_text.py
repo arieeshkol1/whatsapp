@@ -110,6 +110,7 @@ def _touch_user_info_record(
             Key={"PhoneNumber": normalized},
             UpdateExpression=(
                 "SET Profile = if_not_exists(Profile, :empty), "
+                "Details = if_not_exists(Details, :empty), "
                 "CollectedFields = if_not_exists(CollectedFields, :empty), "
                 "LastSeenAt = :last_seen"
             ),
@@ -170,6 +171,7 @@ def _update_user_info_profile(
 
     expression_names = {
         "#profile": "Profile",
+        "#details": "Details",
         "#collected": "CollectedFields",
     }
     expression_values: Dict[str, Any] = {
@@ -180,6 +182,7 @@ def _update_user_info_profile(
     }
     set_fragments = [
         "#profile = if_not_exists(#profile, :empty)",
+        "#details = if_not_exists(#details, :empty)",
         "#collected = if_not_exists(#collected, :empty)",
         "UpdatedAt = :updated_at",
         "LastSeenAt = :last_seen",
@@ -191,6 +194,7 @@ def _update_user_info_profile(
         expression_names[name_token] = key
         expression_values[value_token] = value
         set_fragments.append(f"#profile.{name_token} = {value_token}")
+        set_fragments.append(f"#details.{name_token} = {value_token}")
         set_fragments.append(f"#collected.{name_token} = :true")
 
     update_expression = "SET " + ", ".join(set_fragments)
