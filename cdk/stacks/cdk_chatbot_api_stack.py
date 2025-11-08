@@ -956,12 +956,43 @@ class ChatbotAPIStack(Stack):
             ),
         )
 
+        log_group_name_v2 = (
+            f"/aws/vendedlogs/states/{self.main_resources_name}-process-message-v2"
+        )
+        self.state_machine_log_group_v2 = aws_logs.LogGroup(
+            self,
+            "StateMachine-LogGroupV2",
+            log_group_name=log_group_name_v2,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        Tags.of(self.state_machine_log_group_v2).add("Name", log_group_name_v2)
+
+        self.state_machine_v2 = aws_sfn.StateMachine(
+            self,
+            "StateMachine-ProcessMessageV2",
+            state_machine_name=f"{self.main_resources_name}-process-message-v2",
+            state_machine_type=aws_sfn.StateMachineType.EXPRESS,
+            definition_body=aws_sfn.DefinitionBody.from_chainable(
+                self.state_machine_definition_v2,
+            ),
+            logs=aws_sfn.LogOptions(
+                destination=self.state_machine_log_group_v2,
+                include_execution_data=True,
+                level=aws_sfn.LogLevel.ALL,
+            ),
+            role=self.state_machine.role,
+        )
+
         self.state_machine.grant_start_execution(self.lambda_trigger_state_machine)
 
         # Add additional environment variables to the Lambda Functions
         self.lambda_trigger_state_machine.add_environment(
-            "STATE_MACHINE_ARN",
+            "STATE_MACHINE_V1_ARN",
             self.state_machine.state_machine_arn,
+        )
+        self.lambda_trigger_state_machine.add_environment(
+            "STATE_MACHINE_ARN",
+            self.state_machine_v2.state_machine_arn,
         )
 
         log_group_name_v2 = (

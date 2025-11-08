@@ -78,6 +78,29 @@ def test_state_machine_lambda_has_assess_changes_env_vars():
     )
 
 
+def test_state_machine_lambda_uses_v2_state_machine_by_default():
+    resources = template.find_resources(
+        type="AWS::Lambda::Function",
+    )
+    target = None
+    for resource in resources.values():
+        if (
+            resource["Properties"].get("Handler")
+            == "trigger/trigger_handler.lambda_handler"
+        ):
+            target = resource
+            break
+
+    assert target is not None, "Trigger lambda not found in synthesized template"
+
+    variables = target["Properties"].get("Environment", {}).get("Variables", {})
+    v2_ref = variables.get("STATE_MACHINE_ARN", {}).get("Ref")
+    v1_ref = variables.get("STATE_MACHINE_V1_ARN", {}).get("Ref")
+
+    assert v2_ref is not None and v2_ref.startswith("StateMachineProcessMessageV2")
+    assert v1_ref is not None and v1_ref.startswith("StateMachineProcessMessage")
+
+
 def test_state_machine_lambda_has_dynamodb_permissions():
     template.has_resource_properties(
         "AWS::IAM::Policy",
