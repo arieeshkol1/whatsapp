@@ -1,12 +1,15 @@
 # Built-in imports
+import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Dict, Any, Optional
 from uuid import uuid4
 
 # External imports
 from fastapi import APIRouter, Header, Query, Request, Response, status
+import boto3
 
 # Own imports
 from common.models.text_message_model import TextMessageModel
@@ -25,11 +28,23 @@ ENDPOINT_URL = os.environ.get("ENDPOINT_URL")  # Used for local testing
 CONVERSATION_TIMEOUT_MINUTES = int(
     os.environ.get("CONVERSATION_TIMEOUT_MINUTES", "180")
 )
+STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN")
+ASSESS_CHANGES_FEATURE = os.environ.get("ASSESS_CHANGES_FEATURE", "off")
+
+stepfunctions_client = boto3.client("stepfunctions")
 dynamodb_helper = DynamoDBHelper(table_name=DYNAMODB_TABLE, endpoint_url=ENDPOINT_URL)
 
 
 router = APIRouter()
 logger = custom_logger()
+
+
+def _normalize_phone_number(phone_number: Optional[str]) -> str:
+    if phone_number is None:
+        return ""
+
+    digits = "".join(ch for ch in str(phone_number) if ch.isdigit())
+    return digits or str(phone_number)
 
 
 @router.get("/webhook", tags=["Chatbot"])
@@ -83,8 +98,22 @@ async def post_chatbot_webhook(
         logger.debug(f"PATH_PARAMS: {request.path_params}")
         logger.debug(f"INPUT_BODY: {input_body}")
 
-        # Intentionally break code if parsing fails
-        message = input_body["entry"][0]["changes"][0]["value"]["messages"][0]
+        value_payload = _extract_value_payload(input_body)
+        message = _extract_first_message(value_payload)
+        if message is None:
+            statuses = value_payload.get("statuses") or []
+            if statuses:
+                logger.info(
+                    statuses,
+                    message_details="Received WhatsApp status notification",
+                )
+            else:
+                logger.warning(
+                    value_payload,
+                    message_details="Webhook payload did not include messages",
+                )
+            return {"message": "ok", "details": "Status notification ignored"}
+
         wpp_from_phone_number = message["from"]
         wpp_id = message["id"]
         wpp_timestamp = message["timestamp"]
@@ -94,13 +123,15 @@ async def post_chatbot_webhook(
 
         # Initialize the Message Model based on the type of message
         message_item = None
+        normalized_from_number = _normalize_phone_number(wpp_from_phone_number)
+
         if wpp_type == "text":
             conversation_id = _determine_conversation_id(
-                wpp_from_phone_number, created_at_dt
+                normalized_from_number, created_at_dt
             )
 
             message_item = TextMessageModel(
-                PK=f"NUMBER#{wpp_from_phone_number}",
+                PK=f"NUMBER#{normalized_from_number}",
                 SK=f"MESSAGE#{created_at}",
                 from_number=wpp_from_phone_number,
                 created_at=created_at,
@@ -121,6 +152,22 @@ async def post_chatbot_webhook(
         if message_item:
             result = dynamodb_helper.put_item(message_item.model_dump())
             logger.debug(result, message_details="DynamoDB put_item() result")
+
+            metadata = (
+                value_payload.get("metadata", {})
+                if isinstance(value_payload, dict)
+                else {}
+            )
+            try:
+                state_machine_event = _build_state_machine_event(
+                    message,
+                    metadata,
+                    conversation_id,
+                    correlation_id,
+                )
+                _start_state_machine(state_machine_event)
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to start message processing state machine")
 
         result = {"message": "ok", "details": "Received message"}
         return result
@@ -172,3 +219,112 @@ def _determine_conversation_id(phone_number: str, created_at: datetime) -> int:
         return last_conversation
 
     return last_conversation + 1
+
+
+def _extract_value_payload(input_body: dict) -> dict:
+    """Safely extract the WhatsApp value payload from the webhook body."""
+
+    entries = input_body.get("entry") or []
+    for entry in entries:
+        changes = entry.get("changes") or []
+        for change in changes:
+            value = change.get("value")
+            if value:
+                return value
+    return {}
+
+
+def _extract_first_message(value_payload: dict) -> dict | None:
+    """Return the first WhatsApp message within the value payload."""
+
+    messages = value_payload.get("messages") or []
+    if not messages:
+        return None
+    return messages[0]
+
+
+def _sanitize_execution_component(component: Optional[str]) -> str:
+    if not component:
+        return ""
+
+    sanitized = re.sub(r"[^0-9A-Za-z_-]", "_", component)
+    sanitized = sanitized.strip("_")
+    return sanitized[:60]
+
+
+def _build_state_machine_event(
+    message: Dict[str, Any],
+    metadata: Dict[str, Any],
+    conversation_id: int,
+    correlation_id: str,
+) -> Dict[str, Any]:
+    message_type = message.get("type")
+    message_body = (
+        message.get("text", {}).get("body") if message_type == "text" else None
+    )
+
+    payload: Dict[str, Any] = {
+        "from": message.get("from"),
+        "to": metadata.get("display_phone_number"),
+        "message_type": message_type or ("text" if message_body else None),
+        "message_body": message_body,
+        "wa_id": message.get("id"),
+        "last_seen_at": message.get("timestamp"),
+        "message_id": message.get("id"),
+        "profile_name": message.get("profile", {}).get("name"),
+        "phone_number_id": metadata.get("phone_number_id"),
+        "channel": "whatsapp",
+        "correlation_id": correlation_id,
+        "conversation_id": conversation_id,
+    }
+
+    if message_type == "image":
+        payload["image_url"] = message.get("image", {}).get("link")
+    elif message_type == "video":
+        payload["video_url"] = message.get("video", {}).get("link")
+    elif message_type == "voice":
+        payload["voice_url"] = message.get("voice", {}).get("link")
+    elif message_type == "interactive":
+        payload["interactive_payload"] = message.get("interactive")
+
+    clean_payload = {k: v for k, v in payload.items() if v not in (None, "")}
+
+    event: Dict[str, Any] = {
+        "input": clean_payload,
+        "conversation_id": conversation_id,
+        "correlation_id": correlation_id,
+    }
+
+    if metadata:
+        event["metadata"] = metadata
+
+    features = {}
+    if ASSESS_CHANGES_FEATURE:
+        features["assess_changes"] = ASSESS_CHANGES_FEATURE
+    if features:
+        event["features"] = features
+
+    return event
+
+
+def _start_state_machine(event_payload: Dict[str, Any]) -> None:
+    if not STATE_MACHINE_ARN:
+        logger.warning("STATE_MACHINE_ARN not configured; skipping state machine start")
+        return
+
+    input_payload = json.dumps(event_payload)
+
+    name_parts = [
+        _sanitize_execution_component(event_payload.get("input", {}).get("from")),
+        _sanitize_execution_component(event_payload.get("input", {}).get("message_id")),
+    ]
+    name_parts = [part for part in name_parts if part]
+
+    start_kwargs: Dict[str, Any] = {
+        "stateMachineArn": STATE_MACHINE_ARN,
+        "input": input_payload,
+    }
+    if name_parts:
+        start_kwargs["name"] = "-".join(name_parts)[:80]
+
+    stepfunctions_client.start_execution(**start_kwargs)
