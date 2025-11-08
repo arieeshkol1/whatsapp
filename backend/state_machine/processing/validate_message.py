@@ -6,6 +6,18 @@ from common.logger import custom_logger
 logger = custom_logger()
 
 
+TYPE_REQUIREMENTS = {
+    "text": ("text", "NewImage.text.S is required for text messages"),
+    "image": ("image_url", "NewImage.image_url.S is required for image messages"),
+    "video": ("video_url", "NewImage.video_url.S is required for video messages"),
+    "voice": ("voice_url", "NewImage.voice_url.S is required for voice messages"),
+    "interactive": (
+        "interactive_payload",
+        "NewImage.interactive_payload.S is required for interactive messages",
+    ),
+}
+
+
 class ValidateMessage(BaseStepFunction):
     """
     Validates the incoming message event (typically DynamoDB stream record),
@@ -24,6 +36,7 @@ class ValidateMessage(BaseStepFunction):
         self.logger.info("Starting validate_input for the chatbot")
 
         evt = self.event or {}
+        raw_event = evt.get("raw_event", evt)
         dd = evt.get("input", {}).get("dynamodb", {})
 
         new_image = dd.get("NewImage")
@@ -54,15 +67,17 @@ class ValidateMessage(BaseStepFunction):
             # required checks. This covers synthetic or replayed events that do
             # not persist every attribute.
             if not from_number:
-                from_number = evt.get("from_number")
+                from_number = raw_event.get("from") or evt.get("from_number")
             if not text:
-                text = evt.get("text")
+                text = raw_event.get("message_body") or evt.get("text")
             if not whatsapp_id:
-                whatsapp_id = evt.get("whatsapp_id")
+                whatsapp_id = raw_event.get("wa_id") or evt.get("whatsapp_id")
             if not correlation_id:
-                correlation_id = evt.get("correlation_id")
+                correlation_id = raw_event.get("correlation_id") or evt.get(
+                    "correlation_id"
+                )
             if msg_type is None:
-                fallback_type = evt.get("message_type")
+                fallback_type = raw_event.get("message_type") or evt.get("message_type")
                 if not fallback_type and (text or evt.get("text")):
                     fallback_type = "text"
                 if fallback_type:
@@ -75,12 +90,20 @@ class ValidateMessage(BaseStepFunction):
             self.logger.warning(
                 "DynamoDB NewImage not supplied; falling back to direct event payload"
             )
-            from_number = evt.get("from_number")
-            text = evt.get("text")
-            msg_type = evt.get("message_type") or ("text" if text else None)
-            whatsapp_id = evt.get("whatsapp_id")
-            correlation_id = evt.get("correlation_id")
-            conversation_id_value = evt.get("conversation_id", 1)
+            from_number = raw_event.get("from") or evt.get("from_number")
+            text = raw_event.get("message_body") or evt.get("text")
+            msg_type = (
+                raw_event.get("message_type")
+                or evt.get("message_type")
+                or ("text" if text else None)
+            )
+            whatsapp_id = raw_event.get("wa_id") or evt.get("whatsapp_id")
+            correlation_id = raw_event.get("correlation_id") or evt.get(
+                "correlation_id"
+            )
+            conversation_id_value = raw_event.get(
+                "conversation_id", evt.get("conversation_id", 1)
+            )
             try:
                 conversation_id = int(conversation_id_value)
             except (TypeError, ValueError) as exc:
@@ -93,9 +116,30 @@ class ValidateMessage(BaseStepFunction):
         self._require(msg_type, "NewImage.type.S is required")
         self._require(whatsapp_id, "NewImage.whatsapp_id.S is required")
 
-        # For text messages, ensure text exists
-        if msg_type == "text":
-            self._require(text, "NewImage.text.S is required for text messages")
+        required_field, error_message = TYPE_REQUIREMENTS.get(msg_type, (None, None))
+        if required_field:
+            field_value = None
+            if new_image:
+                field_value = new_image.get(required_field, {}).get("S")
+            if field_value is None:
+                fallback_map = {
+                    "text": text,
+                    "image_url": raw_event.get("image_url") or evt.get("image_url"),
+                    "video_url": raw_event.get("video_url") or evt.get("video_url"),
+                    "voice_url": raw_event.get("voice_url") or evt.get("voice_url"),
+                    "interactive_payload": raw_event.get("interactive_payload")
+                    or evt.get("interactive_payload"),
+                }
+                field_value = fallback_map.get(required_field)
+            self._require(field_value, error_message)
+            if (
+                new_image
+                and required_field not in new_image
+                and field_value is not None
+            ):
+                new_image[required_field] = {"S": str(field_value)}
+            if required_field == "text" and not text and field_value:
+                text = field_value
 
         # Log a safe preview
         self.logger.info(

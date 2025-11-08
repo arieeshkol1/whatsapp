@@ -480,6 +480,23 @@ class ChatbotAPIStack(Stack):
 
         # TODO: create abstraction to reuse the definition of tasks
 
+        self.task_adapt_message = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "Task-Adapter",
+            state_name="Adapt Message",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "Adapter",
+                        "method_name": "transform_input",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
         self.task_validate_message = aws_sfn_tasks.LambdaInvoke(
             self,
             "Task-ValidateMessage",
@@ -630,6 +647,23 @@ class ChatbotAPIStack(Stack):
         )
 
         # Duplicate tasks for the V2 state machine so both definitions can coexist.
+        self.v2_task_adapt_message = aws_sfn_tasks.LambdaInvoke(
+            self,
+            "TaskV2-Adapter",
+            state_name="Adapt Message",
+            lambda_function=self.lambda_state_machine_process_message,
+            payload=aws_sfn.TaskInput.from_object(
+                {
+                    "event.$": "$",
+                    "params": {
+                        "class_name": "Adapter",
+                        "method_name": "transform_input",
+                    },
+                }
+            ),
+            output_path="$.Payload",
+        )
+
         self.v2_task_validate_message = aws_sfn_tasks.LambdaInvoke(
             self,
             "TaskV2-ValidateMessage",
@@ -808,12 +842,14 @@ class ChatbotAPIStack(Stack):
         self.choice_voice = aws_sfn.Condition.string_equals("$.message_type", "voice")
 
         # State Machine event type initial configuration entrypoints
-        self.state_machine_definition = self.task_validate_message.next(
-            aws_sfn.Choice(self, "Message Type?")
-            .when(self.choice_text, self.task_pass_text)
-            .when(self.choice_voice, self.task_pass_voice)
-            .when(self.choice_image, self.task_pass_image)
-            .when(self.choice_video, self.task_pass_video)
+        self.state_machine_definition = self.task_adapt_message.next(
+            self.task_validate_message.next(
+                aws_sfn.Choice(self, "Message Type?")
+                .when(self.choice_text, self.task_pass_text)
+                .when(self.choice_voice, self.task_pass_voice)
+                .when(self.choice_image, self.task_pass_image)
+                .when(self.choice_video, self.task_pass_video)
+            )
         )
 
         # Pass States entrypoints
@@ -851,12 +887,14 @@ class ChatbotAPIStack(Stack):
             "on",
         )
 
-        self.state_machine_definition_v2 = self.v2_task_validate_message.next(
-            aws_sfn.Choice(self, "Message Type? V2")
-            .when(self.choice_text_v2, self.v2_task_pass_text)
-            .when(self.choice_voice_v2, self.v2_task_pass_voice)
-            .when(self.choice_image_v2, self.v2_task_pass_image)
-            .when(self.choice_video_v2, self.v2_task_pass_video)
+        self.state_machine_definition_v2 = self.v2_task_adapt_message.next(
+            self.v2_task_validate_message.next(
+                aws_sfn.Choice(self, "Message Type? V2")
+                .when(self.choice_text_v2, self.v2_task_pass_text)
+                .when(self.choice_voice_v2, self.v2_task_pass_voice)
+                .when(self.choice_image_v2, self.v2_task_pass_image)
+                .when(self.choice_video_v2, self.v2_task_pass_video)
+            )
         )
 
         self.v2_choice_assess_changes = aws_sfn.Choice(
