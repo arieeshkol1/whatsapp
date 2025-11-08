@@ -933,13 +933,17 @@ class ChatbotAPIStack(Stack):
         """
 
         log_group_name = f"/aws/vendedlogs/states/{self.main_resources_name}"
-        self.state_machine_log_group = aws_logs.LogGroup(
-            self,
-            "StateMachine-LogGroup",
-            log_group_name=log_group_name,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        Tags.of(self.state_machine_log_group).add("Name", log_group_name)
+        existing_log_group = self.node.try_find_child("StateMachine-LogGroup")
+        if existing_log_group and isinstance(existing_log_group, aws_logs.LogGroup):
+            self.state_machine_log_group = existing_log_group
+        else:
+            self.state_machine_log_group = aws_logs.LogGroup(
+                self,
+                "StateMachine-LogGroup",
+                log_group_name=log_group_name,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+            Tags.of(self.state_machine_log_group).add("Name", log_group_name)
 
         self.state_machine = aws_sfn.StateMachine(
             self,
@@ -959,13 +963,19 @@ class ChatbotAPIStack(Stack):
         log_group_name_v2 = (
             f"/aws/vendedlogs/states/{self.main_resources_name}-process-message-v2"
         )
-        self.state_machine_log_group_v2 = aws_logs.LogGroup(
-            self,
-            "StateMachine-LogGroupV2",
-            log_group_name=log_group_name_v2,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        Tags.of(self.state_machine_log_group_v2).add("Name", log_group_name_v2)
+        existing_log_group_v2 = self.node.try_find_child("StateMachine-LogGroupV2")
+        if existing_log_group_v2 and isinstance(
+            existing_log_group_v2, aws_logs.LogGroup
+        ):
+            self.state_machine_log_group_v2 = existing_log_group_v2
+        else:
+            self.state_machine_log_group_v2 = aws_logs.LogGroup(
+                self,
+                "StateMachine-LogGroupV2",
+                log_group_name=log_group_name_v2,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+            Tags.of(self.state_machine_log_group_v2).add("Name", log_group_name_v2)
 
         self.state_machine_v2 = aws_sfn.StateMachine(
             self,
@@ -993,33 +1003,6 @@ class ChatbotAPIStack(Stack):
         self.lambda_trigger_state_machine.add_environment(
             "STATE_MACHINE_ARN",
             self.state_machine_v2.state_machine_arn,
-        )
-
-        log_group_name_v2 = (
-            f"/aws/vendedlogs/states/{self.main_resources_name}-process-message-v2"
-        )
-        self.state_machine_log_group_v2 = aws_logs.LogGroup(
-            self,
-            "StateMachine-LogGroupV2",
-            log_group_name=log_group_name_v2,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        Tags.of(self.state_machine_log_group_v2).add("Name", log_group_name_v2)
-
-        self.state_machine_v2 = aws_sfn.StateMachine(
-            self,
-            "StateMachine-ProcessMessageV2",
-            state_machine_name=f"{self.main_resources_name}-process-message-v2",
-            state_machine_type=aws_sfn.StateMachineType.EXPRESS,
-            definition_body=aws_sfn.DefinitionBody.from_chainable(
-                self.state_machine_definition_v2,
-            ),
-            logs=aws_sfn.LogOptions(
-                destination=self.state_machine_log_group_v2,
-                include_execution_data=True,
-                level=aws_sfn.LogLevel.ALL,
-            ),
-            role=self.state_machine.role,
         )
 
     def create_bedrock_components(self) -> None:
