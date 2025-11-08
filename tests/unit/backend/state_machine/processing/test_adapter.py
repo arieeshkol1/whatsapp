@@ -32,6 +32,22 @@ def test_adapter_builds_dynamodb_shape_for_text():
     assert result["raw_event"] == payload
 
 
+def test_adapter_accepts_from_number_alias():
+    payload = {
+        "from_number": "+15551234567",
+        "to_number": "+15550987654",
+        "message_type": "text",
+        "message_body": "שלום",
+    }
+
+    result = Adapter(payload).transform_input()
+
+    new_image = result["input"]["dynamodb"]["NewImage"]
+    assert new_image["from_number"]["S"] == "+15551234567"
+    assert result["from_number"] == "+15551234567"
+    assert result["to_number"] == "+15550987654"
+
+
 @pytest.mark.parametrize(
     "message_type,field,value",
     [

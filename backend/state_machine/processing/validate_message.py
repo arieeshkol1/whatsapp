@@ -67,7 +67,12 @@ class ValidateMessage(BaseStepFunction):
             # required checks. This covers synthetic or replayed events that do
             # not persist every attribute.
             if not from_number:
-                from_number = raw_event.get("from") or evt.get("from_number")
+                from_number = (
+                    raw_event.get("from")
+                    or raw_event.get("from_number")
+                    or evt.get("from_number")
+                    or evt.get("from")
+                )
             if not text:
                 text = raw_event.get("message_body") or evt.get("text")
             if not whatsapp_id:
@@ -90,7 +95,12 @@ class ValidateMessage(BaseStepFunction):
             self.logger.warning(
                 "DynamoDB NewImage not supplied; falling back to direct event payload"
             )
-            from_number = raw_event.get("from") or evt.get("from_number")
+            from_number = (
+                raw_event.get("from")
+                or raw_event.get("from_number")
+                or evt.get("from_number")
+                or evt.get("from")
+            )
             text = raw_event.get("message_body") or evt.get("text")
             msg_type = (
                 raw_event.get("message_type")

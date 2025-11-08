@@ -69,6 +69,24 @@ def test_validate_message_accepts_direct_payload(monkeypatch):
     assert result["features"]["assess_changes"] == "on"
 
 
+def test_validate_message_hydrates_from_number_alias():
+    event = {
+        "raw_event": {
+            "from_number": "+15557771234",
+            "message_body": "שלום",
+            "message_type": "text",
+            "wa_id": "wamid.alias",
+        },
+        "input": {"dynamodb": {"NewImage": {"text": {"S": "שלום"}}}},
+    }
+
+    validator = ValidateMessage(event)
+    result = validator.validate_input()
+
+    assert result["from_number"] == "+15557771234"
+    assert result["message_type"] == "text"
+
+
 def test_validate_message_defaults_type_when_missing(monkeypatch):
     event = {
         "raw_event": {

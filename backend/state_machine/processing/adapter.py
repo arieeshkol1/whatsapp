@@ -50,8 +50,8 @@ class Adapter(BaseStepFunction):
         )
 
         message_type = raw_payload.get("message_type")
-        from_number = raw_payload.get("from")
-        to_number = raw_payload.get("to")
+        from_number = raw_payload.get("from") or raw_payload.get("from_number")
+        to_number = raw_payload.get("to") or raw_payload.get("to_number")
         message_body = raw_payload.get("message_body")
         wa_id = raw_payload.get("wa_id")
         last_seen_at = raw_payload.get("last_seen_at")
