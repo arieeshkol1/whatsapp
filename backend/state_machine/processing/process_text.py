@@ -97,6 +97,10 @@ def _get_users_info_table():
     return _users_info_table
 
 
+USER_INFO_ATTRIBUTE = "UserInfo"
+COLLECTED_FIELDS_ATTRIBUTE = "CollectedFields"
+
+
 def _touch_user_info_record(
     phone_number: Optional[str], last_seen_at: Optional[Any]
 ) -> None:
@@ -109,11 +113,15 @@ def _touch_user_info_record(
         table.update_item(
             Key={"PhoneNumber": normalized},
             UpdateExpression=(
-                "SET profile = if_not_exists(profile, :empty), "
-                "collected_fields = if_not_exists(collected_fields, :empty), "
+                "SET #user_info = if_not_exists(#user_info, :empty), "
+                "#collected = if_not_exists(#collected, :empty), "
                 "updated_at = :updated_at, "
                 "last_seen_at = :last_seen"
             ),
+            ExpressionAttributeNames={
+                "#user_info": USER_INFO_ATTRIBUTE,
+                "#collected": COLLECTED_FIELDS_ATTRIBUTE,
+            },
             ExpressionAttributeValues={
                 ":empty": {},
                 ":last_seen": _as_epoch_decimal(last_seen_at),
@@ -171,8 +179,8 @@ def _update_user_info_profile(
         return
 
     expression_names = {
-        "#profile": "profile",
-        "#collected": "collected_fields",
+        "#profile": USER_INFO_ATTRIBUTE,
+        "#collected": COLLECTED_FIELDS_ATTRIBUTE,
     }
     expression_values: Dict[str, Any] = {
         ":empty": {},

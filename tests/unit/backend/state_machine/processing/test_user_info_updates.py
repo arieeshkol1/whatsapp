@@ -35,11 +35,10 @@ def test_touch_user_info_record_initialises_profile(fake_table):
 
     assert call["Key"] == {"PhoneNumber": "+9725"}
     update_expression = call["UpdateExpression"]
-    assert "profile = if_not_exists(profile, :empty)" in update_expression
-    assert (
-        "collected_fields = if_not_exists(collected_fields, :empty)"
-        in update_expression
-    )
+    assert "#user_info = if_not_exists(#user_info, :empty)" in update_expression
+    assert "#collected = if_not_exists(#collected, :empty)" in update_expression
+    assert call["ExpressionAttributeNames"]["#user_info"] == "UserInfo"
+    assert call["ExpressionAttributeNames"]["#collected"] == "CollectedFields"
     assert call["ExpressionAttributeValues"][":last_seen"] == decimal.Decimal(
         "1700000000"
     )
@@ -57,8 +56,9 @@ def test_update_user_info_profile_sets_profile_map(fake_table):
 
     assert call["Key"] == {"PhoneNumber": "+972542804535"}
     update_expression = call["UpdateExpression"]
-    # Ensure both profile and collected_fields maps receive the values
+    # Ensure both UserInfo and CollectedFields maps receive the values
     assert "#profile.#field0 = :value0" in update_expression
     assert "#collected.#field0 = :true" in update_expression
-    assert call["ExpressionAttributeNames"]["#collected"] == "collected_fields"
+    assert call["ExpressionAttributeNames"]["#profile"] == "UserInfo"
+    assert call["ExpressionAttributeNames"]["#collected"] == "CollectedFields"
     assert call["ExpressionAttributeValues"][":value1"] == "dana@example.com"
