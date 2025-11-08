@@ -1,6 +1,9 @@
 # Own imports
+import json
 import os
+import time
 from datetime import datetime
+from decimal import Decimal
 from html import unescape
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +43,25 @@ _history_helper = (
 _users_info_table = None
 
 
+def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
+    if raw is None:
+        return Decimal(str(int(time.time())))
+
+    if isinstance(raw, (int, float)):
+        return Decimal(str(int(raw)))
+
+    try:
+        trimmed = str(raw).strip()
+        if not trimmed:
+            raise ValueError
+        try:
+            return Decimal(str(int(trimmed)))
+        except ValueError:
+            return Decimal(str(int(float(trimmed))))
+    except (ValueError, TypeError):
+        return Decimal(str(int(time.time())))
+
+
 MAX_SESSION_ID_LENGTH = 256
 
 
@@ -75,7 +97,9 @@ def _get_users_info_table():
     return _users_info_table
 
 
-def _touch_user_info_record(phone_number: Optional[str]) -> None:
+def _touch_user_info_record(
+    phone_number: Optional[str], last_seen_at: Optional[Any]
+) -> None:
     table = _get_users_info_table()
     normalized = _normalize_phone(phone_number)
     if not table or not normalized:
@@ -84,39 +108,53 @@ def _touch_user_info_record(phone_number: Optional[str]) -> None:
     try:
         table.update_item(
             Key={"PhoneNumber": normalized},
-            UpdateExpression="SET Details = if_not_exists(Details, :empty), LastSeenAt = :now",
+            UpdateExpression=(
+                "SET Profile = if_not_exists(Profile, :empty), "
+                "Details = if_not_exists(Details, :empty), "
+                "CollectedFields = if_not_exists(CollectedFields, :empty), "
+                "LastSeenAt = :last_seen"
+            ),
             ExpressionAttributeValues={
                 ":empty": {},
-                ":now": datetime.utcnow().isoformat(),
+                ":last_seen": _as_epoch_decimal(last_seen_at),
             },
         )
     except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
         logger.exception("Failed to ensure UsersInfo record exists")
 
 
-def _extract_customer_details(state: Dict[str, Any]) -> Dict[str, str]:
-    details: Dict[str, str] = {}
+def _extract_customer_details(state: Dict[str, Any]) -> Dict[str, Any]:
+    details: Dict[str, Any] = {}
     candidates = {
         "first_name": ["customer_first_name", "first_name"],
         "last_name": ["customer_last_name", "last_name"],
-        "email_address": ["customer_email", "email", "email_address"],
+        "email": ["customer_email", "email", "email_address"],
+        "company": ["company_name", "company"],
+        "date_of_event": ["event_date"],
+        "event_address": ["event_address"],
+        "guest_count": ["guest_count"],
     }
 
     for canonical, keys in candidates.items():
         for key in keys:
             value = state.get(key)
-            if value:
+            if value not in (None, ""):
                 details[canonical] = value
                 break
+
+    customer_name = state.get("customer_name")
+    if customer_name:
+        details.setdefault("full_name", customer_name)
 
     return details
 
 
-def _update_user_info_details(
+def _update_user_info_profile(
     phone_number: Optional[str],
-    state: Dict[str, Any],
+    updates: Dict[str, Any],
+    last_seen_at: Optional[Any],
 ) -> None:
-    if not state:
+    if not updates:
         return
 
     table = _get_users_info_table()
@@ -124,26 +162,40 @@ def _update_user_info_details(
     if not table or not normalized:
         return
 
-    attributes = _extract_customer_details(state)
-    if not attributes:
+    cleaned_updates = {
+        key: value for key, value in updates.items() if value not in (None, "", [])
+    }
+
+    if not cleaned_updates:
         return
 
-    expression_names = {"#details": "Details"}
+    expression_names = {
+        "#profile": "Profile",
+        "#details": "Details",
+        "#collected": "CollectedFields",
+    }
     expression_values: Dict[str, Any] = {
         ":empty": {},
-        ":now": datetime.utcnow().isoformat(),
+        ":true": True,
+        ":updated_at": datetime.utcnow().isoformat(),
+        ":last_seen": _as_epoch_decimal(last_seen_at),
     }
     set_fragments = [
+        "#profile = if_not_exists(#profile, :empty)",
         "#details = if_not_exists(#details, :empty)",
-        "LastSeenAt = :now",
+        "#collected = if_not_exists(#collected, :empty)",
+        "UpdatedAt = :updated_at",
+        "LastSeenAt = :last_seen",
     ]
 
-    for index, (key, value) in enumerate(attributes.items()):
+    for index, (key, value) in enumerate(cleaned_updates.items()):
         name_token = f"#field{index}"
         value_token = f":value{index}"
         expression_names[name_token] = key
         expression_values[value_token] = value
+        set_fragments.append(f"#profile.{name_token} = {value_token}")
         set_fragments.append(f"#details.{name_token} = {value_token}")
+        set_fragments.append(f"#collected.{name_token} = :true")
 
     update_expression = "SET " + ", ".join(set_fragments)
 
@@ -155,7 +207,57 @@ def _update_user_info_details(
             ExpressionAttributeValues=expression_values,
         )
     except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to update UsersInfo details")
+        logger.exception("Failed to update UsersInfo profile")
+
+
+def _convert_user_updates_to_state(updates: Dict[str, Any]) -> Dict[str, Any]:
+    state_updates: Dict[str, Any] = {}
+    if not updates:
+        return state_updates
+
+    first_name = updates.get("first_name")
+    last_name = updates.get("last_name")
+    email = updates.get("email")
+    company = updates.get("company")
+    date_of_event = updates.get("date_of_event")
+    event_address = updates.get("event_address")
+    guest_count = updates.get("guest_count")
+
+    if first_name:
+        state_updates["customer_first_name"] = first_name
+    if last_name:
+        state_updates["customer_last_name"] = last_name
+    if first_name or last_name:
+        full_name = " ".join(filter(None, [first_name, last_name])).strip()
+        if full_name:
+            state_updates["customer_name"] = full_name
+    if email:
+        state_updates["customer_email"] = email
+    if company:
+        state_updates["company_name"] = company
+    if date_of_event:
+        state_updates["event_date"] = date_of_event
+    if event_address:
+        state_updates["event_address"] = event_address
+    if guest_count not in (None, ""):
+        try:
+            state_updates["guest_count"] = int(guest_count)
+        except (ValueError, TypeError):
+            state_updates["guest_count"] = guest_count
+
+    return state_updates
+
+
+def _update_user_info_details(
+    phone_number: Optional[str],
+    state: Dict[str, Any],
+    last_seen_at: Optional[Any],
+) -> None:
+    if not state:
+        return
+
+    attributes = _extract_customer_details(state)
+    _update_user_info_profile(phone_number, attributes, last_seen_at)
 
 
 def _build_session_id(
@@ -242,6 +344,17 @@ class ProcessText(BaseStepFunction):
         current_whatsapp_id = self.event.get("whatsapp_id") or message_payload.get(
             "whatsapp_id", {}
         ).get("S", "")
+        last_seen_at = self.event.get("last_seen_at")
+        payload_last_seen = message_payload.get("last_seen_at")
+        if not last_seen_at:
+            if isinstance(payload_last_seen, dict):
+                last_seen_at = payload_last_seen.get("S") or payload_last_seen.get("N")
+            elif payload_last_seen:
+                last_seen_at = payload_last_seen
+        if not last_seen_at:
+            last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
+
+        _touch_user_info_record(from_number, last_seen_at)
 
         _touch_user_info_record(from_number)
 
@@ -255,7 +368,7 @@ class ProcessText(BaseStepFunction):
 
         partition_key = f"NUMBER#{from_number}" if from_number else None
         conversation_state: Dict[str, Any] = {}
-        order_progress_summary: Optional[str] = None
+        conversation_state_dirty = False
 
         if partition_key and _history_helper:
             try:
@@ -282,15 +395,11 @@ class ProcessText(BaseStepFunction):
             conversation_state = merge_conversation_state(
                 conversation_state, combined_updates
             )
-            if partition_key and _history_helper:
-                try:
-                    _history_helper.put_conversation_state(
-                        partition_key, conversation_id, conversation_state
-                    )
-                except Exception:  # pragma: no cover - defensive logging
-                    logger.exception("Failed to persist conversation state")
+            conversation_state_dirty = True
 
-        order_progress_summary = format_order_progress_summary(conversation_state)
+        order_progress_summary_for_prompt = format_order_progress_summary(
+            conversation_state
+        )
 
         _update_user_info_details(from_number, conversation_state)
 
@@ -313,8 +422,8 @@ class ProcessText(BaseStepFunction):
         if customer_summary:
             context_sections.append(customer_summary)
 
-        if order_progress_summary:
-            context_sections.append(order_progress_summary)
+        if order_progress_summary_for_prompt:
+            context_sections.append(order_progress_summary_for_prompt)
 
         if history_lines:
             history_block = "\n".join(history_lines)
@@ -337,23 +446,79 @@ class ProcessText(BaseStepFunction):
             input_text=input_text,
         )
 
-        self.response_message = unescape(raw_response or "")
+        reply_text = raw_response or ""
+        user_updates: Dict[str, Any] = {}
+
+        if raw_response:
+            try:
+                parsed = json.loads(raw_response)
+            except json.JSONDecodeError:
+                self.logger.warning(
+                    "Bedrock response was not valid JSON",
+                    extra={"session_id": session_identifier},
+                )
+            else:
+                if isinstance(parsed, dict):
+                    candidate = parsed.get("reply")
+                    if isinstance(candidate, str):
+                        reply_text = candidate
+                    else:
+                        self.logger.warning(
+                            "Bedrock response missing string reply",
+                            extra={"parsed_keys": list(parsed.keys())},
+                        )
+                    updates_candidate = parsed.get("user_updates")
+                    if isinstance(updates_candidate, dict):
+                        user_updates = {
+                            key: value
+                            for key, value in updates_candidate.items()
+                            if value not in (None, "", [])
+                        }
+                else:
+                    self.logger.warning(
+                        "Bedrock response JSON was not an object",
+                        extra={"type": type(parsed).__name__},
+                    )
+
+        self.response_message = unescape(reply_text)
+
+        if user_updates:
+            _update_user_info_profile(from_number, user_updates, last_seen_at)
+            agent_state_updates = _convert_user_updates_to_state(user_updates)
+            if agent_state_updates:
+                conversation_state = merge_conversation_state(
+                    conversation_state, agent_state_updates
+                )
+                conversation_state_dirty = True
+
+        _update_user_info_details(from_number, conversation_state, last_seen_at)
+
+        if conversation_state_dirty and partition_key and _history_helper:
+            try:
+                _history_helper.put_conversation_state(
+                    partition_key, conversation_id, conversation_state
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to persist conversation state")
+
+        final_order_progress_summary = format_order_progress_summary(conversation_state)
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
 
         final_response = self.response_message
-        for section in [customer_summary, order_progress_summary]:
-            if section:
-                if section not in final_response:
-                    final_response = f"{final_response}\n\n{section}"
+        for section in [customer_summary, final_order_progress_summary]:
+            if section and section not in final_response:
+                final_response = f"{final_response}\n\n{section}"
 
         self.event["response_message"] = final_response
         if customer_summary:
             self.event["customer_summary"] = customer_summary
-        if order_progress_summary:
-            self.event["order_progress_summary"] = order_progress_summary
+        if final_order_progress_summary:
+            self.event["order_progress_summary"] = final_order_progress_summary
         if conversation_state:
             self.event["conversation_state"] = conversation_state
+        if user_updates:
+            self.event["user_updates"] = user_updates
 
         return self.event

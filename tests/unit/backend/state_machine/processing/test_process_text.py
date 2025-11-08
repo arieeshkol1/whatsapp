@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -29,15 +30,86 @@ def patch_dependencies(monkeypatch):
     monkeypatch.setattr(
         process_text_module, "_update_user_info_details", lambda *_: None
     )
+    monkeypatch.setattr(
+        process_text_module, "_update_user_info_profile", lambda *_: None
+    )
     monkeypatch.setattr(process_text_module, "get_rules_text", lambda *_: "")
     monkeypatch.setattr(process_text_module, "_history_helper", None)
 
 
-def test_process_text_unescapes_html_entities(monkeypatch):
+def test_process_text_parses_structured_json(monkeypatch):
+    captured = {}
+
+    def fake_profile_update(phone, updates, last_seen):
+        captured["phone"] = phone
+        captured["updates"] = updates
+        captured["last_seen"] = last_seen
+
+    monkeypatch.setattr(
+        process_text_module, "_update_user_info_profile", fake_profile_update
+    )
     monkeypatch.setattr(
         process_text_module,
         "call_bedrock_agent",
-        lambda **_: "&#1488; שלום לך",
+        lambda **_: json.dumps(
+            {
+                "reply": "תודה &quot;לך&quot;",
+                "user_updates": {
+                    "first_name": "דנה",
+                    "email": "dana@example.com",
+                },
+            }
+        ),
+    )
+
+    event = {
+        "input": {
+            "dynamodb": {
+                "NewImage": {
+                    "text": {"S": "חברה טובה"},
+                    "from_number": {"S": "972542804535"},
+                    "whatsapp_id": {"S": "wamid.123"},
+                    "last_seen_at": {"S": "1762208436"},
+                }
+            }
+        },
+        "text": "חברה טובה",
+        "from_number": "972542804535",
+        "whatsapp_id": "wamid.123",
+        "message_type": "text",
+        "conversation_id": 2,
+        "features": {"assess_changes": "off"},
+        "last_seen_at": "1762208436",
+    }
+
+    result = ProcessText(event).process_text()
+
+    assert result["response_message"] == 'תודה "לך"'
+    assert result["user_updates"] == {
+        "first_name": "דנה",
+        "email": "dana@example.com",
+    }
+    assert captured["updates"] == {
+        "first_name": "דנה",
+        "email": "dana@example.com",
+    }
+    assert captured["last_seen"] == "1762208436"
+
+
+def test_process_text_handles_non_json_response(monkeypatch):
+    called = False
+
+    def fake_profile_update(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        process_text_module, "_update_user_info_profile", fake_profile_update
+    )
+    monkeypatch.setattr(
+        process_text_module,
+        "call_bedrock_agent",
+        lambda **_: "תודה רבה",
     )
 
     event = {
@@ -60,5 +132,6 @@ def test_process_text_unescapes_html_entities(monkeypatch):
 
     result = ProcessText(event).process_text()
 
-    assert result["response_message"].startswith("א שלום לך")
-    assert "&#1488;" not in result["response_message"]
+    assert result["response_message"] == "תודה רבה"
+    assert "user_updates" not in result
+    assert called is False
