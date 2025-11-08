@@ -7,6 +7,19 @@ from common.logger import custom_logger
 logger = custom_logger()
 
 
+def _extract_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the canonical payload carrying the incoming message details."""
+
+    if not isinstance(event, dict):
+        return {}
+
+    payload = event.get("input")
+    if isinstance(payload, dict):
+        return payload
+
+    return event
+
+
 def _string_attr(value: Optional[Any]) -> Optional[Dict[str, str]]:
     if value is None:
         return None
@@ -45,19 +58,35 @@ class Adapter(BaseStepFunction):
         super().__init__(event, logger=logger)
 
     def transform_input(self) -> Dict[str, Any]:
-        raw_payload: Dict[str, Any] = (
+        raw_event: Dict[str, Any] = (
             copy.deepcopy(self.event) if isinstance(self.event, dict) else {}
         )
+        payload = copy.deepcopy(_extract_payload(raw_event))
 
-        message_type = raw_payload.get("message_type")
-        from_number = raw_payload.get("from") or raw_payload.get("from_number")
-        to_number = raw_payload.get("to") or raw_payload.get("to_number")
-        message_body = raw_payload.get("message_body")
-        wa_id = raw_payload.get("wa_id")
-        last_seen_at = raw_payload.get("last_seen_at")
-        message_id = raw_payload.get("message_id")
-        correlation_id = raw_payload.get("correlation_id")
-        conversation_id = raw_payload.get("conversation_id")
+        if payload.get("dynamodb"):
+            logger.debug(
+                "Adapter received DynamoDB-style payload; returning passthrough"
+            )
+            adapter_output = copy.deepcopy(raw_event)
+            adapter_output.setdefault("raw_event", payload)
+            return adapter_output
+
+        message_type = payload.get("message_type")
+        if message_type is None and payload.get("message_body"):
+            message_type = "text"
+
+        from_number = payload.get("from") or payload.get("from_number")
+        to_number = payload.get("to") or payload.get("to_number")
+        message_body = payload.get("message_body")
+        wa_id = payload.get("wa_id")
+        last_seen_at = payload.get("last_seen_at")
+        message_id = payload.get("message_id")
+        correlation_id = payload.get("correlation_id") or raw_event.get(
+            "correlation_id"
+        )
+        conversation_id = payload.get("conversation_id") or raw_event.get(
+            "conversation_id"
+        )
 
         new_image: Dict[str, Dict[str, str]] = {}
 
@@ -81,7 +110,7 @@ class Adapter(BaseStepFunction):
         specific_mapping = TYPE_SPECIFIC_FIELDS.get(message_type)
         if specific_mapping:
             source_key, target_key = specific_mapping
-            specific_attr = _string_attr(raw_payload.get(source_key))
+            specific_attr = _string_attr(payload.get(source_key))
             if specific_attr:
                 new_image[target_key] = specific_attr
         elif message_type == "text" and message_body:
@@ -95,7 +124,7 @@ class Adapter(BaseStepFunction):
 
         adapter_output: Dict[str, Any] = {
             "input": {"dynamodb": {"NewImage": new_image}},
-            "raw_event": raw_payload,
+            "raw_event": payload,
         }
 
         derived_fields = {
@@ -119,10 +148,17 @@ class Adapter(BaseStepFunction):
             if value is not None:
                 adapter_output[key] = value
 
-        if "features" in raw_payload and isinstance(raw_payload["features"], dict):
-            adapter_output["features"] = copy.deepcopy(raw_payload["features"])
-        if "metadata" in raw_payload and isinstance(raw_payload["metadata"], dict):
-            adapter_output["metadata"] = copy.deepcopy(raw_payload["metadata"])
+        if "features" in raw_event and isinstance(raw_event["features"], dict):
+            adapter_output["features"] = copy.deepcopy(raw_event["features"])
+        if "metadata" in raw_event and isinstance(raw_event["metadata"], dict):
+            adapter_output["metadata"] = copy.deepcopy(raw_event["metadata"])
+
+        if correlation_id and "correlation_id" not in adapter_output:
+            adapter_output["correlation_id"] = correlation_id
+
+        if raw_event.get("input") is not payload:
+            # Preserve the outer payload for downstream debugging
+            adapter_output.setdefault("original_event", raw_event)
 
         logger.debug(
             "Adapter produced DynamoDB-style event", extra={"keys": list(new_image)}

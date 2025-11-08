@@ -96,9 +96,11 @@ def test_state_machine_lambda_uses_v2_state_machine_by_default():
     variables = target["Properties"].get("Environment", {}).get("Variables", {})
     v2_ref = variables.get("STATE_MACHINE_ARN", {}).get("Ref")
     v1_ref = variables.get("STATE_MACHINE_V1_ARN", {}).get("Ref")
+    trigger_flag = variables.get("ENABLE_STREAM_TRIGGER")
 
     assert v2_ref is not None and v2_ref.startswith("StateMachineProcessMessageV2")
     assert v1_ref is not None and v1_ref.startswith("StateMachineProcessMessage")
+    assert trigger_flag == "off"
 
 
 def test_state_machine_lambda_has_dynamodb_permissions():
@@ -140,3 +142,20 @@ def test_two_state_machines_defined():
     }
     assert any(name.endswith("process-message") for name in names)
     assert any(name.endswith("process-message-v2") for name in names)
+
+
+def test_webhook_lambda_has_state_machine_env_var():
+    resources = template.find_resources("AWS::Lambda::Function")
+    target = None
+    for logical_id, resource in resources.items():
+        props = resource.get("Properties", {})
+        if props.get("Handler") == "whatsapp_webhook/api/v1/main.handler":
+            target = props
+            break
+
+    assert target is not None, "Webhook lambda not found"
+
+    variables = target.get("Environment", {}).get("Variables", {})
+    arn_ref = variables.get("STATE_MACHINE_ARN", {}).get("Ref")
+
+    assert arn_ref is not None and arn_ref.startswith("StateMachineProcessMessageV2")

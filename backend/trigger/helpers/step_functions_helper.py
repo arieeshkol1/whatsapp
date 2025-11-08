@@ -20,6 +20,43 @@ from common.logger import custom_logger
 LOGGER = custom_logger()
 
 step_function_client = boto3.client("stepfunctions")
+ENABLE_STREAM_TRIGGER = os.environ.get("ENABLE_STREAM_TRIGGER", "off").lower()
+
+
+def _json_default(value):
+    """Serialize Decimal values so the Step Functions payload can be encoded."""
+
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value)!r} is not JSON serializable")
+
+
+def _extract_attribute_value(attribute: Optional[Any]) -> str:
+    """Return the raw value from a DynamoDB attribute wrapper."""
+
+    if attribute is None:
+        return "NOT_FOUND"
+
+    value = getattr(attribute, "value", attribute)
+    if value is None:
+        return "NOT_FOUND"
+
+    return str(value)
+
+
+def _sanitize_execution_component(component: str, fallback: str = "NOT_FOUND") -> str:
+    """Sanitize a string so it can be used inside a Step Functions execution name."""
+
+    if not component:
+        return fallback
+
+    sanitized = re.sub(r"[^0-9A-Za-z_-]", "_", component)
+    sanitized = sanitized.strip("_")
+
+    if not sanitized:
+        return fallback
+
+    return sanitized[:40]
 
 
 def _json_default(value):
@@ -74,6 +111,10 @@ def trigger_sm(record: DynamoDBRecord, logger: Logger = None) -> str:
         log_message = {
             "METHOD": "trigger_sm",
         }
+        if ENABLE_STREAM_TRIGGER != "on":
+            logger.info("Stream trigger disabled; skipping state machine start")
+            return ""
+
         state_machine_arn = os.environ.get("STATE_MACHINE_ARN", "")
 
         log_message["MESSAGE"] = f"triggering state machine {state_machine_arn}"

@@ -18,7 +18,9 @@ def test_adapter_builds_dynamodb_shape_for_text():
         "message_id": "mid-001",
     }
 
-    result = Adapter(payload).transform_input()
+    event = {"input": payload, "conversation_id": 9, "correlation_id": "abc"}
+
+    result = Adapter(event).transform_input()
 
     new_image = result["input"]["dynamodb"]["NewImage"]
     assert new_image["type"]["S"] == "text"
@@ -30,6 +32,8 @@ def test_adapter_builds_dynamodb_shape_for_text():
     assert result["to_number"] == "+15550987654"
     assert result["text"] == "שלום"
     assert result["raw_event"] == payload
+    assert result["conversation_id"] == 9
+    assert result["correlation_id"] == "abc"
 
 
 def test_adapter_accepts_from_number_alias():
@@ -40,7 +44,9 @@ def test_adapter_accepts_from_number_alias():
         "message_body": "שלום",
     }
 
-    result = Adapter(payload).transform_input()
+    event = {"input": payload}
+
+    result = Adapter(event).transform_input()
 
     new_image = result["input"]["dynamodb"]["NewImage"]
     assert new_image["from_number"]["S"] == "+15551234567"
@@ -66,9 +72,40 @@ def test_adapter_type_specific_fields(message_type, field, value):
         "wa_id": "wamid.123",
     }
 
-    result = Adapter(payload).transform_input()
+    result = Adapter({"input": payload}).transform_input()
 
     new_image = result["input"]["dynamodb"]["NewImage"]
     assert new_image["type"]["S"] == message_type
     assert new_image[field]["S"] == value
     assert "text" not in new_image
+
+
+def test_adapter_defaults_type_when_missing():
+    payload = {
+        "from": "+15551234567",
+        "message_body": "שלום",
+        "wa_id": "wamid.999",
+    }
+
+    result = Adapter({"input": payload}).transform_input()
+
+    new_image = result["input"]["dynamodb"]["NewImage"]
+    assert new_image["type"]["S"] == "text"
+    assert new_image["text"]["S"] == "שלום"
+
+
+def test_adapter_passthrough_for_dynamodb_payload():
+    dynamodb_event = {
+        "input": {
+            "dynamodb": {
+                "NewImage": {
+                    "from_number": {"S": "+15551234567"},
+                    "type": {"S": "text"},
+                }
+            }
+        }
+    }
+
+    result = Adapter(dynamodb_event).transform_input()
+
+    assert result["input"]["dynamodb"]["NewImage"]["type"]["S"] == "text"

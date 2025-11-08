@@ -994,6 +994,8 @@ class ChatbotAPIStack(Stack):
         )
 
         self.state_machine.grant_start_execution(self.lambda_trigger_state_machine)
+        self.state_machine_v2.grant_start_execution(self.lambda_whatsapp_webhook)
+        self.state_machine_v2.grant_start_execution(self.lambda_trigger_state_machine)
 
         # Add additional environment variables to the Lambda Functions
         self.lambda_trigger_state_machine.add_environment(
@@ -1003,6 +1005,12 @@ class ChatbotAPIStack(Stack):
         self.lambda_trigger_state_machine.add_environment(
             "STATE_MACHINE_ARN",
             self.state_machine_v2.state_machine_arn,
+        )
+        self.lambda_trigger_state_machine.add_environment(
+            "ENABLE_STREAM_TRIGGER", "off"
+        )
+        self.lambda_whatsapp_webhook.add_environment(
+            "STATE_MACHINE_ARN", self.state_machine_v2.state_machine_arn
         )
 
     def create_bedrock_components(self) -> None:
