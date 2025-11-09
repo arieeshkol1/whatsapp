@@ -42,6 +42,25 @@ _history_helper = (
 
 _users_info_table = None
 
+SENSITIVE_CONVERSATION_STATE_KEYS = {
+    "customer_first_name",
+    "customer_last_name",
+    "customer_email",
+    "customer_name",
+    "email",
+    "email_address",
+    "first_name",
+    "last_name",
+    "full_name",
+    "company",
+    "company_name",
+    "event_address",
+    "event_date",
+    "date_of_event",
+    "event_type",
+    "guest_count",
+}
+
 
 def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
     if raw is None:
@@ -121,11 +140,7 @@ def _get_users_info_table():
     return _users_info_table
 
 
-USER_INFO_ATTRIBUTE = "UserInfo"
-COLLECTED_FIELDS_ATTRIBUTE = "CollectedFields"
-
-
-def _load_user_info_profile(phone_number: Optional[str]) -> Dict[str, Any]:
+def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
     table = _get_users_info_table()
     normalized = _normalize_phone(phone_number)
     if not table or not normalized:
@@ -134,18 +149,19 @@ def _load_user_info_profile(phone_number: Optional[str]) -> Dict[str, Any]:
     try:
         response = table.get_item(Key={"PhoneNumber": normalized})
     except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to load user info profile")
+        logger.exception("Failed to load UsersInfo record")
         return {}
 
     item = response.get("Item") if isinstance(response, dict) else None
     if not isinstance(item, dict):
         return {}
 
-    profile = item.get(USER_INFO_ATTRIBUTE)
-    if isinstance(profile, dict):
-        return profile
+    details = item.get("Details")
+    if isinstance(details, dict):
+        return details
 
-    return {}
+    profile = item.get("Profile")
+    return profile if isinstance(profile, dict) else {}
 
 
 def _touch_user_info_record(
@@ -327,12 +343,41 @@ def _conversation_state_updates_from_tags(
         return {}
 
     state_updates: Dict[str, Any] = {}
-    for key_path, value in tagged_updates.items():
-        if value in (None, "", []):
-            continue
-        normalized_key = key_path.replace(" ", "_")
-        normalized_key = normalized_key.replace(".", "_")
-        state_updates[normalized_key] = value
+    if not updates:
+        return state_updates
+
+    first_name = updates.get("first_name")
+    last_name = updates.get("last_name")
+    full_name = updates.get("full_name")
+    email = updates.get("email")
+    company = updates.get("company")
+    date_of_event = updates.get("date_of_event")
+    event_address = updates.get("event_address")
+    guest_count = updates.get("guest_count")
+
+    if first_name:
+        state_updates["customer_first_name"] = first_name
+    if last_name:
+        state_updates["customer_last_name"] = last_name
+    if first_name or last_name:
+        full_name_candidate = " ".join(filter(None, [first_name, last_name])).strip()
+        if full_name_candidate:
+            state_updates["customer_name"] = full_name_candidate
+    elif full_name:
+        state_updates["customer_name"] = str(full_name).strip()
+    if email:
+        state_updates["customer_email"] = email
+    if company:
+        state_updates["company_name"] = company
+    if date_of_event:
+        state_updates["event_date"] = date_of_event
+    if event_address:
+        state_updates["event_address"] = event_address
+    if guest_count not in (None, ""):
+        try:
+            state_updates["guest_count"] = int(guest_count)
+        except (ValueError, TypeError):
+            state_updates["guest_count"] = guest_count
 
     return state_updates
 
@@ -352,6 +397,17 @@ def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
 
     joined = ", ".join(visible_items)
     return f"פרטי משתמש ידועים:\n{joined}"
+
+
+def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    if not state:
+        return {}
+
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in SENSITIVE_CONVERSATION_STATE_KEYS
+    }
 
 
 def _build_session_id(
@@ -465,6 +521,7 @@ class ProcessText(BaseStepFunction):
 
         partition_key = f"NUMBER#{from_number}" if from_number else None
         conversation_state: Dict[str, Any] = {}
+        prompt_state: Dict[str, Any] = {}
         conversation_state_dirty = False
 
         if partition_key and _history_helper:
@@ -474,8 +531,21 @@ class ProcessText(BaseStepFunction):
                 )
                 if isinstance(stored_state, dict):
                     conversation_state = stored_state
+                    prompt_state = dict(stored_state)
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to fetch conversation state")
+
+        user_info_details = _load_user_info_details(from_number)
+        if user_info_details:
+            for key, value in _convert_user_updates_to_state(
+                user_info_details
+            ).items():
+                prompt_state[key] = value
+
+        sanitized_state = _sanitize_conversation_state(prompt_state)
+        if sanitized_state != conversation_state:
+            conversation_state = sanitized_state
+            conversation_state_dirty = True
 
         inferred_updates = extract_state_updates_from_message(self.text)
         provided_updates = (
@@ -489,16 +559,17 @@ class ProcessText(BaseStepFunction):
         combined_updates.update(provided_updates)
 
         if combined_updates:
-            conversation_state = merge_conversation_state(
-                conversation_state, combined_updates
-            )
-            conversation_state_dirty = True
+            prompt_state = merge_conversation_state(prompt_state, combined_updates)
+            sanitized_state = _sanitize_conversation_state(prompt_state)
+            if sanitized_state != conversation_state:
+                conversation_state = sanitized_state
+                conversation_state_dirty = True
 
         order_progress_summary_for_prompt = format_order_progress_summary(
-            conversation_state
+            prompt_state
         )
 
-        _update_user_info_details(from_number, conversation_state, last_seen_at)
+        _update_user_info_details(from_number, prompt_state, last_seen_at)
 
         self.logger.info(
             "Prepared conversation context",
@@ -585,27 +656,31 @@ class ProcessText(BaseStepFunction):
 
         self.response_message = unescape(reply_text)
 
-        if profile_updates:
-            _update_user_info_profile(from_number, profile_updates, last_seen_at)
+        if user_updates:
+            _update_user_info_profile(from_number, user_updates, last_seen_at)
+            agent_state_updates = _convert_user_updates_to_state(user_updates)
+            if agent_state_updates:
+                prompt_state = merge_conversation_state(
+                    prompt_state, agent_state_updates
+                )
+                sanitized_state = _sanitize_conversation_state(prompt_state)
+                if sanitized_state != conversation_state:
+                    conversation_state = sanitized_state
+                    conversation_state_dirty = True
 
-        state_updates_from_tags = _conversation_state_updates_from_tags(
-            conversation_tag_updates
-        )
-        if state_updates_from_tags:
-            conversation_state = merge_conversation_state(
-                conversation_state, state_updates_from_tags
-            )
-            conversation_state_dirty = True
+        _update_user_info_details(from_number, prompt_state, last_seen_at)
 
         if conversation_state_dirty and partition_key and _history_helper:
             try:
                 _history_helper.put_conversation_state(
-                    partition_key, conversation_id, conversation_state
+                    partition_key,
+                    conversation_id,
+                    _sanitize_conversation_state(conversation_state),
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
 
-        final_order_progress_summary = format_order_progress_summary(conversation_state)
+        final_order_progress_summary = format_order_progress_summary(prompt_state)
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
