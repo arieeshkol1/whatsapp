@@ -420,10 +420,16 @@ class SendMessage(BaseStepFunction):
         self.logger.info("Starting send_message for the chatbot")
 
         # Extract inputs
-        text_message = self.event.get("response_message", "DEFAULT_RESPONSE_MESSAGE")
+        text_message_raw = self.event.get("response_message")
         customer_summary = self.event.get("customer_summary")
         order_progress_summary = self.event.get("order_progress_summary")
-        text_message = str(text_message)
+
+        if text_message_raw is None:
+            text_message = "DEFAULT_RESPONSE_MESSAGE"
+        else:
+            text_message = str(text_message_raw)
+            if not text_message.strip():
+                text_message = "DEFAULT_RESPONSE_MESSAGE"
         for supplemental in (customer_summary, order_progress_summary):
             if supplemental and supplemental not in text_message:
                 text_message = f"{text_message}\n\n{supplemental}"

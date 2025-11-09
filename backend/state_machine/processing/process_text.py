@@ -354,9 +354,9 @@ class ProcessText(BaseStepFunction):
         if not last_seen_at:
             last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
 
-        _touch_user_info_record(from_number, last_seen_at)
-
-        _touch_user_info_record(from_number)
+        _touch_user_info_record(
+            from_number, last_seen_at=last_seen_at or datetime.utcnow()
+        )
 
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
@@ -401,7 +401,7 @@ class ProcessText(BaseStepFunction):
             conversation_state
         )
 
-        _update_user_info_details(from_number, conversation_state)
+        _update_user_info_details(from_number, conversation_state, last_seen_at)
 
         self.logger.info(
             "Prepared conversation context",
