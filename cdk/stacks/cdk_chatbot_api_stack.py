@@ -136,17 +136,19 @@ class ChatbotAPIStack(Stack):
         )
         Tags.of(self.customers_table).add("Name", "Customers")
 
+        users_info_table_name = self.app_config.get("USER_INFO_TABLE", "UsersInfo")
+
         self.users_info_table = aws_dynamodb.Table(
             self,
             "DynamoDB-Table-UsersInfo",
-            table_name="UsersInfo",
+            table_name=users_info_table_name,
             partition_key=aws_dynamodb.Attribute(
                 name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
             ),
             billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
+            removal_policy=RemovalPolicy.RETAIN,
         )
-        Tags.of(self.users_info_table).add("Name", "UsersInfo")
+        Tags.of(self.users_info_table).add("Name", users_info_table_name)
 
     def create_lambda_layers(self) -> None:
         """
@@ -1589,6 +1591,13 @@ reply חייב להיות טקסט UTF-8 נקי ללא HTML, ישויות או M
             "DeploymentEnvironment",
             value=self.app_config["deployment_environment"],
             description="Deployment environment",
+        )
+
+        CfnOutput(
+            self,
+            "UsersInfoTableName",
+            value=self.users_info_table.table_name,
+            description="UsersInfo DynamoDB table name",
         )
 
         if self.deployment_environment != "prod":

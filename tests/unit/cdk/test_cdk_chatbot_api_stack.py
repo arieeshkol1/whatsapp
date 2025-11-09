@@ -44,6 +44,36 @@ def test_dynamodb_table_created():
     assert len(match) >= 3
 
 
+def test_users_info_table_schema():
+    template.has_resource(
+        "AWS::DynamoDB::Table",
+        assertions.Match.object_like(
+            {
+                "DeletionPolicy": "Retain",
+                "UpdateReplacePolicy": "Retain",
+                "Properties": assertions.Match.object_like(
+                    {
+                        "TableName": "UsersInfo",
+                        "BillingMode": "PAY_PER_REQUEST",
+                        "KeySchema": [
+                            {
+                                "AttributeName": "PhoneNumber",
+                                "KeyType": "HASH",
+                            }
+                        ],
+                        "AttributeDefinitions": [
+                            {
+                                "AttributeName": "PhoneNumber",
+                                "AttributeType": "S",
+                            }
+                        ],
+                    }
+                ),
+            }
+        ),
+    )
+
+
 def test_lambda_function_created():
     match = template.find_resources(
         type="AWS::Lambda::Function",
