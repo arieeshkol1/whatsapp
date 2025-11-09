@@ -10,9 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
-
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
 from common.helpers.dynamodb_helper import DynamoDBHelper
