@@ -39,7 +39,7 @@ def test_dynamodb_table_created():
     match = template.find_resources(
         type="AWS::DynamoDB::Table",
     )
-    assert len(match) >= 3
+    assert len(match) >= 2
 
 
 def test_lambda_function_created():

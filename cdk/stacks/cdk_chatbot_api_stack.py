@@ -126,23 +126,17 @@ class ChatbotAPIStack(Stack):
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
 
     def create_users_info_table(self) -> None:
-        """Create DynamoDB table for storing flexible user profile information."""
+        """Reference the pre-existing UsersInfo DynamoDB table."""
 
         users_info_table_name = self.app_config.get(
             "users_info_table_name", "UsersInfo"
         )
 
-        self.users_info_table = aws_dynamodb.Table(
+        self.users_info_table = aws_dynamodb.Table.from_table_name(
             self,
             "UsersInfoTable",
             table_name=users_info_table_name,
-            partition_key=aws_dynamodb.Attribute(
-                name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
-            ),
-            billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
         )
-        Tags.of(self.users_info_table).add("Name", users_info_table_name)
 
     def create_lambda_layers(self) -> None:
         """
