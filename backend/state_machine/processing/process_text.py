@@ -26,6 +26,10 @@ from common.rules_config import get_rules_text
 
 from state_machine.processing.bedrock_agent import call_bedrock_agent
 
+# DynamoDB attribute names for the UsersInfo table
+USER_INFO_ATTRIBUTE = "user_info"
+COLLECTED_FIELDS_ATTRIBUTE = "collected_fields"
+
 
 logger = custom_logger()
 
@@ -397,6 +401,17 @@ def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
 
     joined = ", ".join(visible_items)
     return f"פרטי משתמש ידועים:\n{joined}"
+
+
+def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    if not state:
+        return {}
+
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in SENSITIVE_CONVERSATION_STATE_KEYS
+    }
 
 
 def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:

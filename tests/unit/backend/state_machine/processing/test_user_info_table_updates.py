@@ -27,24 +27,20 @@ def fake_table(monkeypatch):
     return table
 
 
-def test_touch_user_info_record_initialises_profile(fake_table):
+def test_touch_user_info_record_initialises_details(fake_table):
     process_text_module._touch_user_info_record("9725", 1700000000)
 
     assert fake_table.calls, "update_item should be invoked"
     call: Dict[str, Any] = fake_table.calls[0]
 
     assert call["Key"] == {"PhoneNumber": "+9725"}
-    update_expression = call["UpdateExpression"]
-    assert "#user_info = if_not_exists(#user_info, :empty)" in update_expression
-    assert "#collected = if_not_exists(#collected, :empty)" in update_expression
-    assert call["ExpressionAttributeNames"]["#user_info"] == "UserInfo"
-    assert call["ExpressionAttributeNames"]["#collected"] == "CollectedFields"
+    assert "Details = if_not_exists(Details, :empty)" in call["UpdateExpression"]
     assert call["ExpressionAttributeValues"][":last_seen"] == decimal.Decimal(
         "1700000000"
     )
 
 
-def test_update_user_info_profile_sets_profile_map(fake_table):
+def test_update_user_info_profile_sets_details_map(fake_table):
     process_text_module._update_user_info_profile(
         phone_number="972542804535",
         updates={"first_name": "Dana", "email": "dana@example.com"},
@@ -56,9 +52,8 @@ def test_update_user_info_profile_sets_profile_map(fake_table):
 
     assert call["Key"] == {"PhoneNumber": "+972542804535"}
     update_expression = call["UpdateExpression"]
-    # Ensure both UserInfo and CollectedFields maps receive the values
+    # Ensure both Details and Profile maps receive the values
+    assert "#details.#field0 = :value0" in update_expression
     assert "#profile.#field0 = :value0" in update_expression
-    assert "#collected.#field0 = :true" in update_expression
-    assert call["ExpressionAttributeNames"]["#profile"] == "UserInfo"
-    assert call["ExpressionAttributeNames"]["#collected"] == "CollectedFields"
+    assert call["ExpressionAttributeNames"]["#details"] == "Details"
     assert call["ExpressionAttributeValues"][":value1"] == "dana@example.com"
