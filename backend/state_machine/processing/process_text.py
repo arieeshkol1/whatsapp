@@ -65,11 +65,6 @@ SENSITIVE_CONVERSATION_STATE_KEYS = {
     "full_name",
     "company",
     "company_name",
-    "event_address",
-    "event_date",
-    "date_of_event",
-    "event_type",
-    "guest_count",
 }
 
 
@@ -472,6 +467,34 @@ def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
     return f"פרטי משתמש ידועים:\n{joined}"
 
 
+def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    if not state:
+        return {}
+
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in SENSITIVE_CONVERSATION_STATE_KEYS
+    }
+
+
+def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
+    if not profile:
+        return None
+
+    visible_items: List[str] = []
+    for key, value in profile.items():
+        if value in (None, "", []):
+            continue
+        visible_items.append(f"{key}: {value}")
+
+    if not visible_items:
+        return None
+
+    joined = ", ".join(visible_items)
+    return f"פרטי משתמש ידועים:\n{joined}"
+
+
 def _build_session_id(
     from_number: Optional[str], conversation_id: Optional[int], fallback: str
 ) -> str:
@@ -745,7 +768,7 @@ class ProcessText(BaseStepFunction):
                 _history_helper.put_conversation_state(
                     partition_key,
                     conversation_id,
-                    _sanitize_conversation_state(conversation_state),
+                    conversation_state,
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
@@ -766,8 +789,7 @@ class ProcessText(BaseStepFunction):
             self.event["customer_summary"] = customer_summary
         if final_order_progress_summary:
             self.event["order_progress_summary"] = final_order_progress_summary
-        if conversation_state:
-            self.event["conversation_state"] = conversation_state
+        self.event["conversation_state"] = conversation_state
         if profile_updates:
             self.event["user_updates"] = profile_updates
 
