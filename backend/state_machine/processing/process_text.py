@@ -251,7 +251,7 @@ def _convert_user_updates_to_state(updates: Dict[str, Any]) -> Dict[str, Any]:
 def _update_user_info_details(
     phone_number: Optional[str],
     state: Dict[str, Any],
-    last_seen_at: Optional[Any],
+    last_seen_at: Optional[Any] = None,
 ) -> None:
     if not state:
         return
@@ -355,8 +355,6 @@ class ProcessText(BaseStepFunction):
             last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
 
         _touch_user_info_record(from_number, last_seen_at)
-
-        _touch_user_info_record(from_number)
 
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
@@ -491,7 +489,7 @@ class ProcessText(BaseStepFunction):
                 )
                 conversation_state_dirty = True
 
-        _update_user_info_details(from_number, conversation_state, last_seen_at)
+        _update_user_info_details(from_number, conversation_state)
 
         if conversation_state_dirty and partition_key and _history_helper:
             try:

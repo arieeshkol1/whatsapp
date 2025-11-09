@@ -144,7 +144,7 @@ class ChatbotAPIStack(Stack):
                 name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
             ),
             billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
+            removal_policy=RemovalPolicy.RETAIN,
         )
         Tags.of(self.users_info_table).add("Name", "UsersInfo")
 
