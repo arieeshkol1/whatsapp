@@ -25,6 +25,7 @@ stack: ChatbotAPIStack = ChatbotAPIStack(
         "secret_name": "test-secret",
         "enable_rag": True,
         "meta_endpoint": "https://fake-endpoint.com",
+        "users_info_table_name": "aws-whatsapp-users-info-test",
     },
 )
 template: assertions.Template = assertions.Template.from_stack(stack)
@@ -53,3 +54,14 @@ def test_api_gateway_created():
         type="AWS::ApiGateway::RestApi",
     )
     assert len(match) == 1
+
+
+def test_state_machine_lambda_has_user_info_env():
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "Environment": {
+                "Variables": {"USER_INFO_TABLE": assertions.Match.any_value()}
+            }
+        },
+    )
