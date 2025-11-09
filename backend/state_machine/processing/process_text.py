@@ -172,16 +172,22 @@ def _touch_user_info_record(
         table.update_item(
             Key={"PhoneNumber": normalized},
             UpdateExpression=(
-                "SET Details = if_not_exists(Details, :empty), "
-                "Profile = if_not_exists(Profile, :empty), "
-                "CollectedFields = if_not_exists(CollectedFields, :empty), "
-                "updated_at = :updated_at, last_seen_at = :last_seen"
+                "SET #info = if_not_exists(#info, :empty), "
+                 "Details = if_not_exists(Details, :empty), "
+                 "Profile = if_not_exists(Profile, :empty), "
+                 "#collected = if_not_exists(#collected, :empty), "
+                 "CollectedFields = if_not_exists(CollectedFields, :empty), "
+                 "updated_at = :updated_at, last_seen_at = :last_seen"
             ),
+            ExpressionAttributeNames={
+                 "#info": USER_INFO_ATTRIBUTE,             # "Details"
+                 "#collected": COLLECTED_FIELDS_ATTRIBUTE, # "CollectedFields"
+            },
             ExpressionAttributeValues={
                 ":empty": {},
                 ":updated_at": datetime.utcnow().isoformat(),
                 ":last_seen": _as_epoch_decimal(last_seen_at),
-            },
+             },
         )
     except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
         logger.exception("Failed to touch UsersInfo record")
@@ -207,9 +213,10 @@ def _update_user_info_profile(
         return
 
     expression_names = {
-        "#details": USER_INFO_ATTRIBUTE,          # "Details"
-        "#profile": PROFILE_ATTRIBUTE,            # "Profile"
-        "#collected": COLLECTED_FIELDS_ATTRIBUTE, # "CollectedFields"
+        "#info": USER_INFO_ATTRIBUTE,              # ADD THIS
+        "#details": USER_INFO_ATTRIBUTE,
+        "#profile": PROFILE_ATTRIBUTE,
+        "#collected": COLLECTED_FIELDS_ATTRIBUTE,
     }
     expression_values: Dict[str, Any] = {
         ":empty": {},
@@ -218,9 +225,13 @@ def _update_user_info_profile(
         ":last_seen": _as_epoch_decimal(last_seen_at),
     }
     set_fragments = [
+        "#info = if_not_exists(#info, :empty)",       # ADD THIS
         "#details = if_not_exists(#details, :empty)",
+        "Details = if_not_exists(Details, :empty)",
         "#profile = if_not_exists(#profile, :empty)",
+        "Profile = if_not_exists(Profile, :empty)",
         "#collected = if_not_exists(#collected, :empty)",
+        "CollectedFields = if_not_exists(CollectedFields, :empty)",
         "updated_at = :updated_at",
         "last_seen_at = :last_seen",
     ]
@@ -235,11 +246,12 @@ def _update_user_info_profile(
 
         profile_tokens: List[str] = []
         for segment_index, segment in enumerate(segments):
-            token = f"#field{index}_{segment_index}"
+            token = f"#field{index}" if len(segments) == 1 else f"#field{index}_{segment_index}"
             expression_names[token] = segment
             profile_tokens.append(token)
 
         profile_path = ".".join(profile_tokens)
+        set_fragments.append(f"#info.{profile_path} = {value_token}")      # ADD THIS
         set_fragments.append(f"#details.{profile_path} = {value_token}")
         set_fragments.append(f"#profile.{profile_path} = {value_token}")
         set_fragments.append(f"#collected.{profile_path} = :true")
