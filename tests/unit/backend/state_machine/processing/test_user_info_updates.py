@@ -34,7 +34,10 @@ def test_touch_user_info_record_initialises_details(fake_table):
     call: Dict[str, Any] = fake_table.calls[0]
 
     assert call["Key"] == {"PhoneNumber": "+9725"}
-    assert "Details = if_not_exists(Details, :empty)" in call["UpdateExpression"]
+    update_expression = call["UpdateExpression"]
+    assert "Profile = if_not_exists(Profile, :empty)" in update_expression
+    assert "Details = if_not_exists(Details, :empty)" in update_expression
+    assert "CollectedFields = if_not_exists(CollectedFields, :empty)" in update_expression
     assert call["ExpressionAttributeValues"][":last_seen"] == decimal.Decimal(
         "1700000000"
     )
@@ -52,8 +55,9 @@ def test_update_user_info_profile_sets_details_map(fake_table):
 
     assert call["Key"] == {"PhoneNumber": "+972542804535"}
     update_expression = call["UpdateExpression"]
-    # Ensure both Details and Profile maps receive the values
+    # Ensure the user profile, details, and collected maps receive the values
     assert "#details.#field0 = :value0" in update_expression
     assert "#profile.#field0 = :value0" in update_expression
+    assert "#collected.#field0 = :true" in update_expression
     assert call["ExpressionAttributeNames"]["#details"] == "Details"
     assert call["ExpressionAttributeValues"][":value1"] == "dana@example.com"

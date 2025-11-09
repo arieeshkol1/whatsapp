@@ -144,7 +144,7 @@ class ChatbotAPIStack(Stack):
                 name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
             ),
             billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
+            removal_policy=RemovalPolicy.RETAIN,
         )
         Tags.of(self.users_info_table).add("Name", "UsersInfo")
 
@@ -1589,6 +1589,13 @@ reply חייב להיות טקסט UTF-8 נקי ללא HTML, ישויות או M
             "DeploymentEnvironment",
             value=self.app_config["deployment_environment"],
             description="Deployment environment",
+        )
+
+        CfnOutput(
+            self,
+            "UsersInfoTableName",
+            value=self.users_info_table.table_name,
+            description="UsersInfo DynamoDB table name",
         )
 
         if self.deployment_environment != "prod":
