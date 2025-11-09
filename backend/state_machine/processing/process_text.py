@@ -42,6 +42,25 @@ _history_helper = (
 
 _users_info_table = None
 
+SENSITIVE_CUSTOMER_STATE_KEYS = {
+    "customer_first_name",
+    "customer_last_name",
+    "customer_email",
+    "customer_name",
+    "first_name",
+    "last_name",
+    "full_name",
+    "email",
+    "email_address",
+    "company_name",
+    "company",
+    "event_address",
+    "event_date",
+    "date_of_event",
+    "event_type",
+    "guest_count",
+}
+
 
 def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
     if raw is None:
@@ -95,6 +114,30 @@ def _get_users_info_table():
         _users_info_table = None
 
     return _users_info_table
+
+
+def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
+    table = _get_users_info_table()
+    normalized = _normalize_phone(phone_number)
+    if not table or not normalized:
+        return {}
+
+    try:
+        response = table.get_item(Key={"PhoneNumber": normalized})
+    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
+        logger.exception("Failed to load UsersInfo record")
+        return {}
+
+    item = response.get("Item") if isinstance(response, dict) else None
+    if not isinstance(item, dict):
+        return {}
+
+    details = item.get("Details")
+    if isinstance(details, dict):
+        return details
+
+    profile = item.get("Profile")
+    return profile if isinstance(profile, dict) else {}
 
 
 def _touch_user_info_record(
@@ -217,6 +260,7 @@ def _convert_user_updates_to_state(updates: Dict[str, Any]) -> Dict[str, Any]:
 
     first_name = updates.get("first_name")
     last_name = updates.get("last_name")
+    full_name = updates.get("full_name")
     email = updates.get("email")
     company = updates.get("company")
     date_of_event = updates.get("date_of_event")
@@ -228,9 +272,11 @@ def _convert_user_updates_to_state(updates: Dict[str, Any]) -> Dict[str, Any]:
     if last_name:
         state_updates["customer_last_name"] = last_name
     if first_name or last_name:
-        full_name = " ".join(filter(None, [first_name, last_name])).strip()
-        if full_name:
-            state_updates["customer_name"] = full_name
+        full_name_candidate = " ".join(filter(None, [first_name, last_name])).strip()
+        if full_name_candidate:
+            state_updates["customer_name"] = full_name_candidate
+    elif full_name:
+        state_updates["customer_name"] = str(full_name).strip()
     if email:
         state_updates["customer_email"] = email
     if company:
@@ -258,6 +304,17 @@ def _update_user_info_details(
 
     attributes = _extract_customer_details(state)
     _update_user_info_profile(phone_number, attributes, last_seen_at)
+
+
+def _sanitize_conversation_state_for_storage(state: Dict[str, Any]) -> Dict[str, Any]:
+    if not state:
+        return {}
+
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in SENSITIVE_CUSTOMER_STATE_KEYS
+    }
 
 
 def _build_session_id(
@@ -354,9 +411,9 @@ class ProcessText(BaseStepFunction):
         if not last_seen_at:
             last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
 
-        _touch_user_info_record(from_number, last_seen_at)
-
-        _touch_user_info_record(from_number)
+        _touch_user_info_record(
+            from_number, last_seen_at=last_seen_at or datetime.utcnow()
+        )
 
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
@@ -380,6 +437,13 @@ class ProcessText(BaseStepFunction):
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to fetch conversation state")
 
+        user_info_details = _load_user_info_details(from_number)
+        if user_info_details:
+            conversation_state = merge_conversation_state(
+                conversation_state,
+                _convert_user_updates_to_state(user_info_details),
+            )
+
         inferred_updates = extract_state_updates_from_message(self.text)
         provided_updates = (
             self.event.get("conversation_state_updates")
@@ -401,7 +465,7 @@ class ProcessText(BaseStepFunction):
             conversation_state
         )
 
-        _update_user_info_details(from_number, conversation_state)
+        _update_user_info_details(from_number, conversation_state, last_seen_at)
 
         self.logger.info(
             "Prepared conversation context",
@@ -496,7 +560,9 @@ class ProcessText(BaseStepFunction):
         if conversation_state_dirty and partition_key and _history_helper:
             try:
                 _history_helper.put_conversation_state(
-                    partition_key, conversation_id, conversation_state
+                    partition_key,
+                    conversation_id,
+                    _sanitize_conversation_state_for_storage(conversation_state),
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
@@ -517,7 +583,9 @@ class ProcessText(BaseStepFunction):
         if final_order_progress_summary:
             self.event["order_progress_summary"] = final_order_progress_summary
         if conversation_state:
-            self.event["conversation_state"] = conversation_state
+            self.event["conversation_state"] = _sanitize_conversation_state_for_storage(
+                conversation_state
+            )
         if user_updates:
             self.event["user_updates"] = user_updates
 
