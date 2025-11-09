@@ -32,12 +32,34 @@ logger = custom_logger()
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
+USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
 
 _history_helper = (
     DynamoDBHelper(table_name=DYNAMODB_TABLE, endpoint_url=ENDPOINT_URL)
     if DYNAMODB_TABLE
     else None
 )
+
+_users_info_table = None
+
+
+def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
+    if raw is None:
+        return Decimal(str(int(time.time())))
+
+    if isinstance(raw, (int, float)):
+        return Decimal(str(int(raw)))
+
+    try:
+        trimmed = str(raw).strip()
+        if not trimmed:
+            raise ValueError
+        try:
+            return Decimal(str(int(trimmed)))
+        except ValueError:
+            return Decimal(str(int(float(trimmed))))
+    except (ValueError, TypeError):
+        return Decimal(str(int(time.time())))
 
 
 MAX_SESSION_ID_LENGTH = 256
@@ -470,7 +492,9 @@ class ProcessText(BaseStepFunction):
             )
             conversation_state_dirty = True
 
-        order_progress_summary = format_order_progress_summary(conversation_state)
+        order_progress_summary_for_prompt = format_order_progress_summary(
+            conversation_state
+        )
 
         self.logger.info(
             "Prepared conversation context",
@@ -491,8 +515,8 @@ class ProcessText(BaseStepFunction):
         if customer_summary:
             context_sections.append(customer_summary)
 
-        if order_progress_summary:
-            context_sections.append(order_progress_summary)
+        if order_progress_summary_for_prompt:
+            context_sections.append(order_progress_summary_for_prompt)
 
         if history_lines:
             history_block = "\n".join(history_lines)
