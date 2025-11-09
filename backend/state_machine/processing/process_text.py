@@ -444,6 +444,34 @@ def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    if not state:
+        return {}
+
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in SENSITIVE_CONVERSATION_STATE_KEYS
+    }
+
+
+def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
+    if not profile:
+        return None
+
+    visible_items: List[str] = []
+    for key, value in profile.items():
+        if value in (None, "", []):
+            continue
+        visible_items.append(f"{key}: {value}")
+
+    if not visible_items:
+        return None
+
+    joined = ", ".join(visible_items)
+    return f"פרטי משתמש ידועים:\n{joined}"
+
+
 def _build_session_id(
     from_number: Optional[str], conversation_id: Optional[int], fallback: str
 ) -> str:
