@@ -1,4 +1,3 @@
-# Own imports
 import json
 import os
 import time
@@ -29,6 +28,7 @@ from state_machine.processing.bedrock_agent import call_bedrock_agent
 # DynamoDB attribute names for the UsersInfo table
 USER_INFO_ATTRIBUTE = "user_info"
 COLLECTED_FIELDS_ATTRIBUTE = "collected_fields"
+MAX_SESSION_ID_LENGTH = 256
 
 
 __all__ = [
@@ -92,33 +92,6 @@ def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
         return Decimal(str(int(time.time())))
 
 
-MAX_SESSION_ID_LENGTH = 256
-
-
-USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
-
-_users_info_table = None
-
-
-def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
-    if raw is None:
-        return Decimal(str(int(time.time())))
-
-    if isinstance(raw, (int, float)):
-        return Decimal(str(int(raw)))
-
-    try:
-        trimmed = str(raw).strip()
-        if not trimmed:
-            raise ValueError
-        try:
-            return Decimal(str(int(trimmed)))
-        except ValueError:
-            return Decimal(str(int(float(trimmed))))
-    except (ValueError, TypeError):
-        return Decimal(str(int(time.time())))
-
-
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
     if not number:
         return None
@@ -149,6 +122,27 @@ def _get_users_info_table():
         _users_info_table = None
 
     return _users_info_table
+
+
+def _load_user_info_profile(phone_number: Optional[str]) -> Dict[str, Any]:
+    """Load the user_info map from UsersInfo table."""
+    table = _get_users_info_table()
+    normalized = _normalize_phone(phone_number)
+    if not table or not normalized:
+        return {}
+
+    try:
+        response = table.get_item(Key={"PhoneNumber": normalized})
+    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
+        logger.exception("Failed to load UsersInfo profile")
+        return {}
+
+    item = response.get("Item") if isinstance(response, dict) else None
+    if not isinstance(item, dict):
+        return {}
+
+    profile = item.get(USER_INFO_ATTRIBUTE)
+    return profile if isinstance(profile, dict) else {}
 
 
 def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
@@ -393,21 +387,28 @@ def _conversation_state_updates_from_tags(
     return state_updates
 
 
-def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
-    if not profile:
-        return None
+def _conversation_state_updates_from_tags(
+    tagged_updates: Dict[str, Any]
+) -> Dict[str, Any]:
+    if not tagged_updates:
+        return {}
 
-    visible_items = []
-    for key, value in profile.items():
-        if value in (None, "", []):
-            continue
-        visible_items.append(f"{key}: {value}")
+    return _convert_user_updates_to_state(tagged_updates)
 
-    if not visible_items:
-        return None
 
-    joined = ", ".join(visible_items)
-    return f"פרטי משתמש ידועים:\n{joined}"
+def _update_user_info_details(
+    phone_number: Optional[str],
+    state: Dict[str, Any],
+    last_seen_at: Optional[Any],
+) -> None:
+    if not state:
+        return {}
+
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in SENSITIVE_CONVERSATION_STATE_KEYS
+    }
 
 
 def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -537,9 +538,7 @@ class ProcessText(BaseStepFunction):
         if not last_seen_at:
             last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
 
-        _touch_user_info_record(
-            from_number, last_seen_at=last_seen_at or datetime.utcnow()
-        )
+        _touch_user_info_record(from_number, last_seen_at or datetime.utcnow())
 
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
@@ -570,10 +569,13 @@ class ProcessText(BaseStepFunction):
 
         user_info_details = _load_user_info_details(from_number)
         if user_info_details:
-            for key, value in _convert_user_updates_to_state(
-                user_info_details
-            ).items():
+            for key, value in _convert_user_updates_to_state(user_info_details).items():
                 prompt_state[key] = value
+
+        user_info_profile = _load_user_info_profile(from_number)
+        if user_info_profile:
+            for key, value in _convert_user_updates_to_state(user_info_profile).items():
+                prompt_state.setdefault(key, value)
 
         sanitized_state = _sanitize_conversation_state(prompt_state)
         if sanitized_state != conversation_state:
@@ -598,9 +600,7 @@ class ProcessText(BaseStepFunction):
                 conversation_state = sanitized_state
                 conversation_state_dirty = True
 
-        order_progress_summary_for_prompt = format_order_progress_summary(
-            prompt_state
-        )
+        order_progress_summary_for_prompt = format_order_progress_summary(prompt_state)
 
         _update_user_info_details(from_number, prompt_state, last_seen_at)
 
@@ -651,7 +651,6 @@ class ProcessText(BaseStepFunction):
         )
 
         reply_text = raw_response or ""
-        user_update_entries: List[Dict[str, Any]] = []
         profile_updates: Dict[str, Any] = {}
         conversation_tag_updates: Dict[str, Any] = {}
 
@@ -675,12 +674,19 @@ class ProcessText(BaseStepFunction):
                         )
 
                     updates_candidate = parsed.get("user_updates")
-                    entries = _normalise_user_update_entries(updates_candidate)
-                    (
-                        profile_updates,
-                        conversation_tag_updates,
-                        user_update_entries,
-                    ) = _partition_user_update_entries(entries)
+                    if isinstance(updates_candidate, dict):
+                        profile_updates = {
+                            key: value
+                            for key, value in updates_candidate.items()
+                            if value not in (None, "", [])
+                        }
+                    tags_candidate = parsed.get("conversation_tags")
+                    if isinstance(tags_candidate, dict):
+                        conversation_tag_updates = {
+                            key: value
+                            for key, value in tags_candidate.items()
+                            if value not in (None, "", [])
+                        }
                 else:
                     self.logger.warning(
                         "Bedrock response JSON was not an object",
@@ -689,9 +695,12 @@ class ProcessText(BaseStepFunction):
 
         self.response_message = unescape(reply_text)
 
-        if user_updates:
-            _update_user_info_profile(from_number, user_updates, last_seen_at)
-            agent_state_updates = _convert_user_updates_to_state(user_updates)
+        if profile_updates or conversation_tag_updates:
+            if profile_updates:
+                _update_user_info_profile(from_number, profile_updates, last_seen_at)
+            agent_state_updates = _conversation_state_updates_from_tags(
+                {**profile_updates, **conversation_tag_updates}
+            )
             if agent_state_updates:
                 prompt_state = merge_conversation_state(
                     prompt_state, agent_state_updates
@@ -731,7 +740,7 @@ class ProcessText(BaseStepFunction):
             self.event["order_progress_summary"] = final_order_progress_summary
         if conversation_state:
             self.event["conversation_state"] = conversation_state
-        if user_update_entries:
-            self.event["user_updates"] = user_update_entries
+        if profile_updates:
+            self.event["user_updates"] = profile_updates
 
         return self.event
