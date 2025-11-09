@@ -328,14 +328,7 @@ def _partition_user_update_entries(
 
     return profile_updates, conversation_updates, passthrough
 
-<<<<<<< HEAD
 def _conversation_state_updates_from_tags(tagged_updates: Dict[str, Any]) -> Dict[str, Any]:
-=======
-
-def _conversation_state_updates_from_tags(
-    tagged_updates: Dict[str, Any],
-) -> Dict[str, Any]:
->>>>>>> 745ed53 (fix(users-info + state): align Details/Profile/CollectedFields; parse user_updates list; keep date_of_event)
     if not tagged_updates:
         return {}
 
