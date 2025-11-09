@@ -297,7 +297,7 @@ def _normalise_user_update_entries(raw_updates: Any) -> List[Dict[str, Any]]:
     return entries
 
 def _partition_user_update_entries(
-    entries: List[Dict[str, Any]]
+    entries: List[Dict[str, Any]],
 ) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
     profile_updates: Dict[str, Any] = {}
     conversation_updates: Dict[str, Any] = {}
@@ -328,7 +328,14 @@ def _partition_user_update_entries(
 
     return profile_updates, conversation_updates, passthrough
 
+<<<<<<< HEAD
 def _conversation_state_updates_from_tags(tagged_updates: Dict[str, Any]) -> Dict[str, Any]:
+=======
+
+def _conversation_state_updates_from_tags(
+    tagged_updates: Dict[str, Any],
+) -> Dict[str, Any]:
+>>>>>>> 745ed53 (fix(users-info + state): align Details/Profile/CollectedFields; parse user_updates list; keep date_of_event)
     if not tagged_updates:
         return {}
 
