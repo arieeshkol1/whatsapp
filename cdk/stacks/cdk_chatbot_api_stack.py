@@ -8,6 +8,8 @@ MODELS_REQUIRING_INFERENCE_PROFILE = {
     "anthropic.claude-3-5-haiku-20241022-v1:0",
 }
 
+USERS_INFO_TABLE_DEFAULT_NAME = "UsersInfo"
+
 # External imports
 from aws_cdk import (
     Duration,
@@ -132,11 +134,21 @@ class ChatbotAPIStack(Stack):
             "users_info_table_name", "UsersInfo"
         )
 
-        self.users_info_table = aws_dynamodb.Table.from_table_name(
-            self,
-            "UsersInfoTable",
-            table_name=users_info_table_name,
+        users_info_table_name = self.app_config.get(
+            "USER_INFO_TABLE", USERS_INFO_TABLE_DEFAULT_NAME
         )
+
+        self.users_info_table = aws_dynamodb.Table(
+            self,
+            "DynamoDB-Table-UsersInfo",
+            table_name=users_info_table_name,
+            partition_key=aws_dynamodb.Attribute(
+                name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
+            ),
+            billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        Tags.of(self.users_info_table).add("Name", users_info_table_name)
 
     def create_lambda_layers(self) -> None:
         """
