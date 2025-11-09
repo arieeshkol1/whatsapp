@@ -119,29 +119,6 @@ def _get_users_info_table():
     return _users_info_table
 
 
-def _load_user_info_profile(phone_number: Optional[str]) -> Dict[str, Any]:
-    """
-    Load the Details map (USER_INFO_ATTRIBUTE) from UsersInfo table.
-    """
-    table = _get_users_info_table()
-    normalized = _normalize_phone(phone_number)
-    if not table or not normalized:
-        return {}
-
-    try:
-        response = table.get_item(Key={"PhoneNumber": normalized})
-    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to load UsersInfo profile")
-        return {}
-
-    item = response.get("Item") if isinstance(response, dict) else None
-    if not isinstance(item, dict):
-        return {}
-
-    profile = item.get(USER_INFO_ATTRIBUTE)
-    return profile if isinstance(profile, dict) else {}
-
-
 def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
     table = _get_users_info_table()
     normalized = _normalize_phone(phone_number)
@@ -158,12 +135,16 @@ def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
     if not isinstance(item, dict):
         return {}
 
-    details = item.get("Details")
-    if isinstance(details, dict):
-        return details
+    combined: Dict[str, Any] = {}
+    for attribute in ("Profile", "Details"):
+        values = item.get(attribute)
+        if isinstance(values, dict):
+            for key, value in values.items():
+                if value in (None, "", []):
+                    continue
+                combined[key] = value
 
-    profile = item.get("Profile")
-    return profile if isinstance(profile, dict) else {}
+    return combined
 
 
 def _touch_user_info_record(
@@ -399,6 +380,23 @@ def _conversation_state_updates_from_tags(
     return state_updates
 
 
+def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
+    if not profile:
+        return None
+
+    visible_items = []
+    for key, value in profile.items():
+        if value in (None, "", []):
+            continue
+        visible_items.append(f"{key}: {value}")
+
+    if not visible_items:
+        return None
+
+    joined = ", ".join(visible_items)
+    return f"פרטי משתמש ידועים:\n{joined}"
+
+
 def _update_user_info_details(
     phone_number: Optional[str],
     state: Dict[str, Any],
@@ -529,7 +527,7 @@ class ProcessText(BaseStepFunction):
         if not last_seen_at:
             last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
 
-        _touch_user_info_record(from_number, last_seen_at or datetime.utcnow())
+        _touch_user_info_record(from_number, last_seen_at)
 
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
@@ -539,8 +537,8 @@ class ProcessText(BaseStepFunction):
             format_customer_summary(customer_profile) if customer_profile else None
         )
 
-        stored_user_profile = _load_user_info_profile(from_number)
-        user_profile_context = _format_user_info_for_context(stored_user_profile)
+        user_info_details = _load_user_info_details(from_number)
+        user_info_context = _format_user_info_for_context(user_info_details)
 
         partition_key = f"NUMBER#{from_number}" if from_number else None
         conversation_state: Dict[str, Any] = {}
@@ -597,7 +595,7 @@ class ProcessText(BaseStepFunction):
 
         order_progress_summary_for_prompt = format_order_progress_summary(prompt_state)
 
-        _update_user_info_details(from_number, prompt_state, last_seen_at)
+        _update_user_info_details(from_number, conversation_state, last_seen_at)
 
         self.logger.info(
             "Prepared conversation context",
@@ -620,6 +618,9 @@ class ProcessText(BaseStepFunction):
 
         if order_progress_summary_for_prompt:
             context_sections.append(order_progress_summary_for_prompt)
+
+        if user_info_context:
+            context_sections.append(user_info_context)
 
         if history_lines:
             history_block = "\n".join(history_lines)

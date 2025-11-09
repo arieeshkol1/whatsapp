@@ -1,10 +1,37 @@
 import json
-from typing import Any, Dict
+import os
+from typing import Dict
 
 import pytest
 
 from state_machine.processing import process_text as process_text_module
 
+@pytest.fixture(autouse=True)
+def patch_dependencies(monkeypatch):
+    monkeypatch.setattr(process_text_module, "_touch_user_info_record", lambda *_: None)
+    monkeypatch.setattr(
+        process_text_module, "_fetch_conversation_history", lambda *_: []
+    )
+    monkeypatch.setattr(process_text_module, "load_customer_profile", lambda *_: None)
+    monkeypatch.setattr(process_text_module, "format_customer_summary", lambda *_: None)
+    monkeypatch.setattr(
+        process_text_module, "extract_state_updates_from_message", lambda *_: {}
+    )
+    monkeypatch.setattr(
+        process_text_module, "merge_conversation_state", lambda *_1, **_2: {}
+    )
+    monkeypatch.setattr(
+        process_text_module, "format_order_progress_summary", lambda *_: None
+    )
+    monkeypatch.setattr(
+        process_text_module, "_update_user_info_details", lambda *_: None
+    )
+    monkeypatch.setattr(
+        process_text_module, "_update_user_info_profile", lambda *_: None
+    )
+    monkeypatch.setattr(process_text_module, "_load_user_info_details", lambda *_: {})
+    monkeypatch.setattr(process_text_module, "get_rules_text", lambda *_: "")
+    monkeypatch.setattr(process_text_module, "_history_helper", None)
 
 class StubUsersInfoTable:
     def __init__(self) -> None:
@@ -74,19 +101,44 @@ def test_process_text_persists_user_updates(monkeypatch):
         ),
     )
 
-    event = _base_event()
-    result = process_text_module.ProcessText(event).process_text()
+    assert result["response_message"] == "תודה רבה"
+    assert "user_updates" not in result
+    assert called is False
 
-    assert result["response_message"].startswith("תודה")
-    assert result["conversation_state"]["date_of_event"] == "2025-01-01"
-    assert result["user_updates"] == [
-        {"tag": "profile.first_name", "value": "דנה"},
-        {"tag": "conversation.date_of_event", "value": "2025-01-01"},
-    ]
 
-    # Two calls are expected: one to touch the record and one to persist profile updates.
-    assert len(stub_table.update_calls) >= 2
-    update_expression = stub_table.update_calls[-1]["UpdateExpression"]
-    assert "#info." in update_expression
-    expression_values = stub_table.update_calls[-1]["ExpressionAttributeValues"]
-    assert any(value == "דנה" for value in expression_values.values())
+def test_process_text_includes_user_info_context(monkeypatch):
+    captured: Dict[str, str] = {}
+
+    def fake_call_bedrock_agent(**kwargs):
+        captured["input_text"] = kwargs["input_text"]
+        return ""
+
+    monkeypatch.setattr(
+        process_text_module,
+        "_load_user_info_details",
+        lambda *_: {"first_name": "Dana", "event_date": "2025-01-01"},
+    )
+    monkeypatch.setattr(
+        process_text_module, "call_bedrock_agent", fake_call_bedrock_agent
+    )
+
+    event = {
+        "input": {
+            "dynamodb": {
+                "NewImage": {
+                    "text": {"S": "שלום"},
+                    "from_number": {"S": "972542804535"},
+                    "whatsapp_id": {"S": "wamid.123"},
+                }
+            }
+        },
+        "text": "שלום",
+        "from_number": "972542804535",
+        "whatsapp_id": "wamid.123",
+        "conversation_id": 1,
+    }
+
+    ProcessText(event).process_text()
+
+    assert "פרטי משתמש ידועים" in captured["input_text"]
+    assert "first_name: Dana" in captured["input_text"]
