@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Dict
 
 import pytest
 
@@ -33,6 +34,7 @@ def patch_dependencies(monkeypatch):
     monkeypatch.setattr(
         process_text_module, "_update_user_info_profile", lambda *_: None
     )
+    monkeypatch.setattr(process_text_module, "_load_user_info_details", lambda *_: {})
     monkeypatch.setattr(process_text_module, "get_rules_text", lambda *_: "")
     monkeypatch.setattr(process_text_module, "_history_helper", None)
 
@@ -135,3 +137,41 @@ def test_process_text_handles_non_json_response(monkeypatch):
     assert result["response_message"] == "תודה רבה"
     assert "user_updates" not in result
     assert called is False
+
+
+def test_process_text_includes_user_info_context(monkeypatch):
+    captured: Dict[str, str] = {}
+
+    def fake_call_bedrock_agent(**kwargs):
+        captured["input_text"] = kwargs["input_text"]
+        return ""
+
+    monkeypatch.setattr(
+        process_text_module,
+        "_load_user_info_details",
+        lambda *_: {"first_name": "Dana", "event_date": "2025-01-01"},
+    )
+    monkeypatch.setattr(
+        process_text_module, "call_bedrock_agent", fake_call_bedrock_agent
+    )
+
+    event = {
+        "input": {
+            "dynamodb": {
+                "NewImage": {
+                    "text": {"S": "שלום"},
+                    "from_number": {"S": "972542804535"},
+                    "whatsapp_id": {"S": "wamid.123"},
+                }
+            }
+        },
+        "text": "שלום",
+        "from_number": "972542804535",
+        "whatsapp_id": "wamid.123",
+        "conversation_id": 1,
+    }
+
+    ProcessText(event).process_text()
+
+    assert "פרטי משתמש ידועים" in captured["input_text"]
+    assert "first_name: Dana" in captured["input_text"]
