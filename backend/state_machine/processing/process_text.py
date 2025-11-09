@@ -67,6 +67,7 @@ SENSITIVE_CONVERSATION_STATE_KEYS = {
     # note: 'date_of_event' is intentionally NOT excluded — tests expect it to persist
 }
 
+
 def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
     if raw is None:
         return Decimal(str(int(time.time())))
@@ -85,6 +86,7 @@ def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
     except (ValueError, TypeError):
         return Decimal(str(int(time.time())))
 
+
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
     if not number:
         return None
@@ -96,6 +98,7 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     if stripped[0].isdigit():
         return f"+{stripped}"
     return stripped
+
 
 def _get_users_info_table():
     global _users_info_table
@@ -114,6 +117,7 @@ def _get_users_info_table():
         _users_info_table = None
 
     return _users_info_table
+
 
 def _load_user_info_profile(phone_number: Optional[str]) -> Dict[str, Any]:
     """
@@ -136,6 +140,7 @@ def _load_user_info_profile(phone_number: Optional[str]) -> Dict[str, Any]:
 
     profile = item.get(USER_INFO_ATTRIBUTE)
     return profile if isinstance(profile, dict) else {}
+
 
 def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
     table = _get_users_info_table()
@@ -160,6 +165,7 @@ def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
     profile = item.get("Profile")
     return profile if isinstance(profile, dict) else {}
 
+
 def _touch_user_info_record(
     phone_number: Optional[str], last_seen_at: Optional[Any]
 ) -> None:
@@ -173,24 +179,25 @@ def _touch_user_info_record(
             Key={"PhoneNumber": normalized},
             UpdateExpression=(
                 "SET #info = if_not_exists(#info, :empty), "
-                 "Details = if_not_exists(Details, :empty), "
-                 "Profile = if_not_exists(Profile, :empty), "
-                 "#collected = if_not_exists(#collected, :empty), "
-                 "CollectedFields = if_not_exists(CollectedFields, :empty), "
-                 "updated_at = :updated_at, last_seen_at = :last_seen"
+                "Details = if_not_exists(Details, :empty), "
+                "Profile = if_not_exists(Profile, :empty), "
+                "#collected = if_not_exists(#collected, :empty), "
+                "CollectedFields = if_not_exists(CollectedFields, :empty), "
+                "updated_at = :updated_at, last_seen_at = :last_seen"
             ),
             ExpressionAttributeNames={
-                 "#info": USER_INFO_ATTRIBUTE,             # "Details"
-                 "#collected": COLLECTED_FIELDS_ATTRIBUTE, # "CollectedFields"
+                "#info": USER_INFO_ATTRIBUTE,  # "Details"
+                "#collected": COLLECTED_FIELDS_ATTRIBUTE,  # "CollectedFields"
             },
             ExpressionAttributeValues={
                 ":empty": {},
                 ":updated_at": datetime.utcnow().isoformat(),
                 ":last_seen": _as_epoch_decimal(last_seen_at),
-             },
+            },
         )
     except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
         logger.exception("Failed to touch UsersInfo record")
+
 
 def _update_user_info_profile(
     phone_number: Optional[str],
@@ -213,7 +220,7 @@ def _update_user_info_profile(
         return
 
     expression_names = {
-        "#info": USER_INFO_ATTRIBUTE,              # ADD THIS
+        "#info": USER_INFO_ATTRIBUTE,  # ADD THIS
         "#details": USER_INFO_ATTRIBUTE,
         "#profile": PROFILE_ATTRIBUTE,
         "#collected": COLLECTED_FIELDS_ATTRIBUTE,
@@ -225,7 +232,7 @@ def _update_user_info_profile(
         ":last_seen": _as_epoch_decimal(last_seen_at),
     }
     set_fragments = [
-        "#info = if_not_exists(#info, :empty)",       # ADD THIS
+        "#info = if_not_exists(#info, :empty)",  # ADD THIS
         "#details = if_not_exists(#details, :empty)",
         "Details = if_not_exists(Details, :empty)",
         "#profile = if_not_exists(#profile, :empty)",
@@ -246,12 +253,16 @@ def _update_user_info_profile(
 
         profile_tokens: List[str] = []
         for segment_index, segment in enumerate(segments):
-            token = f"#field{index}" if len(segments) == 1 else f"#field{index}_{segment_index}"
+            token = (
+                f"#field{index}"
+                if len(segments) == 1
+                else f"#field{index}_{segment_index}"
+            )
             expression_names[token] = segment
             profile_tokens.append(token)
 
         profile_path = ".".join(profile_tokens)
-        set_fragments.append(f"#info.{profile_path} = {value_token}")      # ADD THIS
+        set_fragments.append(f"#info.{profile_path} = {value_token}")  # ADD THIS
         set_fragments.append(f"#details.{profile_path} = {value_token}")
         set_fragments.append(f"#profile.{profile_path} = {value_token}")
         set_fragments.append(f"#collected.{profile_path} = :true")
@@ -267,6 +278,7 @@ def _update_user_info_profile(
         )
     except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
         logger.exception("Failed to update UsersInfo profile")
+
 
 def _normalise_user_update_entries(raw_updates: Any) -> List[Dict[str, Any]]:
     if raw_updates is None:
@@ -308,6 +320,7 @@ def _normalise_user_update_entries(raw_updates: Any) -> List[Dict[str, Any]]:
 
     return entries
 
+
 def _partition_user_update_entries(
     entries: List[Dict[str, Any]],
 ) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
@@ -340,7 +353,10 @@ def _partition_user_update_entries(
 
     return profile_updates, conversation_updates, passthrough
 
-def _conversation_state_updates_from_tags(tagged_updates: Dict[str, Any]) -> Dict[str, Any]:
+
+def _conversation_state_updates_from_tags(
+    tagged_updates: Dict[str, Any]
+) -> Dict[str, Any]:
     if not tagged_updates:
         return {}
 
@@ -382,6 +398,7 @@ def _conversation_state_updates_from_tags(tagged_updates: Dict[str, Any]) -> Dic
 
     return state_updates
 
+
 def _update_user_info_details(
     phone_number: Optional[str],
     state: Dict[str, Any],
@@ -391,6 +408,7 @@ def _update_user_info_details(
     # We only sanitize state before storing conversation_state to history.
     return None
 
+
 def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
     if not state:
         return {}
@@ -399,6 +417,7 @@ def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in state.items()
         if key not in SENSITIVE_CONVERSATION_STATE_KEYS
     }
+
 
 def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
     if not profile:
@@ -415,6 +434,7 @@ def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
 
     joined = ", ".join(visible_items)
     return f"פרטי משתמש ידועים:\n{joined}"
+
 
 def _build_session_id(
     from_number: Optional[str], conversation_id: Optional[int], fallback: str
@@ -435,6 +455,7 @@ def _build_session_id(
 
     return session_identifier[:MAX_SESSION_ID_LENGTH]
 
+
 def _fetch_conversation_history(from_number: str, conversation_id: int) -> List[dict]:
     if not _history_helper or not from_number or conversation_id < 1:
         return []
@@ -449,6 +470,7 @@ def _fetch_conversation_history(from_number: str, conversation_id: int) -> List[
     except Exception:  # pragma: no cover - defensive logging
         logger.exception("Failed to fetch conversation history")
         return []
+
 
 def _format_history_messages(items: List[dict], current_whatsapp_id: str) -> List[str]:
     history_lines: List[str] = []
@@ -467,6 +489,7 @@ def _format_history_messages(items: List[dict], current_whatsapp_id: str) -> Lis
         )
 
     return history_lines
+
 
 class ProcessText(BaseStepFunction):
     """
@@ -537,12 +560,16 @@ class ProcessText(BaseStepFunction):
 
         user_info_details = _load_user_info_details(from_number)
         if user_info_details:
-            for key, value in _conversation_state_updates_from_tags(user_info_details).items():
+            for key, value in _conversation_state_updates_from_tags(
+                user_info_details
+            ).items():
                 prompt_state[key] = value
 
         user_info_profile = _load_user_info_profile(from_number)
         if user_info_profile:
-            for key, value in _conversation_state_updates_from_tags(user_info_profile).items():
+            for key, value in _conversation_state_updates_from_tags(
+                user_info_profile
+            ).items():
                 prompt_state.setdefault(key, value)
 
         sanitized_state = _sanitize_conversation_state(prompt_state)
