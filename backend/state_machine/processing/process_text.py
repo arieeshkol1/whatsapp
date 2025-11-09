@@ -42,18 +42,18 @@ _history_helper = (
 
 _users_info_table = None
 
-SENSITIVE_CUSTOMER_STATE_KEYS = {
+SENSITIVE_CONVERSATION_STATE_KEYS = {
     "customer_first_name",
     "customer_last_name",
     "customer_email",
     "customer_name",
+    "email",
+    "email_address",
     "first_name",
     "last_name",
     "full_name",
-    "email",
-    "email_address",
-    "company_name",
     "company",
+    "company_name",
     "event_address",
     "event_date",
     "date_of_event",
@@ -306,14 +306,14 @@ def _update_user_info_details(
     _update_user_info_profile(phone_number, attributes, last_seen_at)
 
 
-def _sanitize_conversation_state_for_storage(state: Dict[str, Any]) -> Dict[str, Any]:
+def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
     if not state:
         return {}
 
     return {
         key: value
         for key, value in state.items()
-        if key not in SENSITIVE_CUSTOMER_STATE_KEYS
+        if key not in SENSITIVE_CONVERSATION_STATE_KEYS
     }
 
 
@@ -425,6 +425,7 @@ class ProcessText(BaseStepFunction):
 
         partition_key = f"NUMBER#{from_number}" if from_number else None
         conversation_state: Dict[str, Any] = {}
+        prompt_state: Dict[str, Any] = {}
         conversation_state_dirty = False
 
         if partition_key and _history_helper:
@@ -434,13 +435,14 @@ class ProcessText(BaseStepFunction):
                 )
                 if isinstance(stored_state, dict):
                     conversation_state = stored_state
+                    prompt_state = dict(stored_state)
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to fetch conversation state")
 
         user_info_details = _load_user_info_details(from_number)
         if user_info_details:
-            conversation_state = merge_conversation_state(
-                conversation_state,
+            prompt_state = merge_conversation_state(
+                prompt_state,
                 _convert_user_updates_to_state(user_info_details),
             )
 
@@ -459,13 +461,14 @@ class ProcessText(BaseStepFunction):
             conversation_state = merge_conversation_state(
                 conversation_state, combined_updates
             )
+            prompt_state = merge_conversation_state(prompt_state, combined_updates)
             conversation_state_dirty = True
 
         order_progress_summary_for_prompt = format_order_progress_summary(
-            conversation_state
+            prompt_state
         )
 
-        _update_user_info_details(from_number, conversation_state, last_seen_at)
+        _update_user_info_details(from_number, prompt_state, last_seen_at)
 
         self.logger.info(
             "Prepared conversation context",
@@ -553,21 +556,24 @@ class ProcessText(BaseStepFunction):
                 conversation_state = merge_conversation_state(
                     conversation_state, agent_state_updates
                 )
+                prompt_state = merge_conversation_state(
+                    prompt_state, agent_state_updates
+                )
                 conversation_state_dirty = True
 
-        _update_user_info_details(from_number, conversation_state, last_seen_at)
+        _update_user_info_details(from_number, prompt_state, last_seen_at)
 
         if conversation_state_dirty and partition_key and _history_helper:
             try:
                 _history_helper.put_conversation_state(
                     partition_key,
                     conversation_id,
-                    _sanitize_conversation_state_for_storage(conversation_state),
+                    _sanitize_conversation_state(conversation_state),
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
 
-        final_order_progress_summary = format_order_progress_summary(conversation_state)
+        final_order_progress_summary = format_order_progress_summary(prompt_state)
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
@@ -582,9 +588,9 @@ class ProcessText(BaseStepFunction):
             self.event["customer_summary"] = customer_summary
         if final_order_progress_summary:
             self.event["order_progress_summary"] = final_order_progress_summary
-        if conversation_state:
-            self.event["conversation_state"] = _sanitize_conversation_state_for_storage(
-                conversation_state
+        if conversation_state or prompt_state:
+            self.event["conversation_state"] = _sanitize_conversation_state(
+                prompt_state if prompt_state else conversation_state
             )
         if user_updates:
             self.event["user_updates"] = user_updates
