@@ -31,6 +31,13 @@ USER_INFO_ATTRIBUTE = "user_info"
 COLLECTED_FIELDS_ATTRIBUTE = "collected_fields"
 
 
+__all__ = [
+    "ProcessText",
+    "USER_INFO_ATTRIBUTE",
+    "COLLECTED_FIELDS_ATTRIBUTE",
+]
+
+
 logger = custom_logger()
 
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
@@ -401,6 +408,17 @@ def _format_user_info_for_context(profile: Dict[str, Any]) -> Optional[str]:
 
     joined = ", ".join(visible_items)
     return f"פרטי משתמש ידועים:\n{joined}"
+
+
+def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    if not state:
+        return {}
+
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in SENSITIVE_CONVERSATION_STATE_KEYS
+    }
 
 
 def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
