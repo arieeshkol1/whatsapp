@@ -135,7 +135,12 @@ class ChatbotAPIStack(Stack):
             "users_info_table_name",
             USERS_INFO_TABLE_DEFAULT_NAME,
         )
-        self.users_info_table = aws_dynamodb.Table.from_table_name(
+
+        users_info_table_name = self.app_config.get(
+            "USER_INFO_TABLE", USERS_INFO_TABLE_DEFAULT_NAME
+        )
+
+        self.users_info_table = aws_dynamodb.Table(
             self,
             "UsersInfoTable",
             table_name=users_info_table_name,

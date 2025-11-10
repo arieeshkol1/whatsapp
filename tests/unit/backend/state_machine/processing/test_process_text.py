@@ -6,28 +6,28 @@ import pytest
 from state_machine.processing import process_text as process_text_module
 
 
-class StubUsersInfoTable:
-    def __init__(self) -> None:
-        self.update_calls = []
-        self.items: Dict[str, Dict[str, Any]] = {}
-
-    def update_item(self, **kwargs) -> None:  # pragma: no cover - simple recorder
-        self.update_calls.append(kwargs)
-
-    def get_item(self, Key: Dict[str, Any]) -> Dict[str, Any]:  # pragma: no cover
-        phone = Key.get("PhoneNumber")
-        return {"Item": self.items.get(phone, {})}
-
-
 @pytest.fixture(autouse=True)
-def reset_users_info_table():
-    original_table = process_text_module._users_info_table
-    original_name = process_text_module.USER_INFO_TABLE_NAME
-    process_text_module._users_info_table = None
-    process_text_module.USER_INFO_TABLE_NAME = "UsersInfoTest"
-    yield
-    process_text_module._users_info_table = original_table
-    process_text_module.USER_INFO_TABLE_NAME = original_name
+def patch_dependencies(monkeypatch):
+    monkeypatch.setattr(
+        process_text_module, "_fetch_conversation_history", lambda *_1, **_2: []
+    )
+    monkeypatch.setattr(process_text_module, "load_customer_profile", lambda *_: None)
+    monkeypatch.setattr(process_text_module, "format_customer_summary", lambda *_: None)
+    monkeypatch.setattr(
+        process_text_module, "extract_state_updates_from_message", lambda *_: {}
+    )
+    monkeypatch.setattr(
+        process_text_module, "merge_conversation_state", lambda state, updates: {
+            **state,
+            **updates,
+        }
+    )
+    monkeypatch.setattr(
+        process_text_module, "format_order_progress_summary", lambda *_: None
+    )
+    monkeypatch.setattr(process_text_module, "get_rules_text", lambda *_: "")
+    monkeypatch.setattr(process_text_module, "_load_user_info_details", lambda *_: {})
+    monkeypatch.setattr(process_text_module, "_history_helper", None)
 
 
 def _base_event() -> Dict[str, Any]:
@@ -47,19 +47,34 @@ def _base_event() -> Dict[str, Any]:
     }
 
 
-def test_process_text_persists_user_updates(monkeypatch):
-    stub_table = StubUsersInfoTable()
-    process_text_module._users_info_table = stub_table
+def test_process_text_includes_assess_changes_details(monkeypatch):
+    captured: Dict[str, str] = {}
 
-    monkeypatch.setattr(process_text_module, "load_customer_profile", lambda *_: None)
-    monkeypatch.setattr(process_text_module, "format_customer_summary", lambda *_: None)
-    monkeypatch.setattr(process_text_module, "get_rules_text", lambda: None)
+    def fake_call_bedrock_agent(**kwargs):
+        captured.update(kwargs)
+        return ""
+
     monkeypatch.setattr(
-        process_text_module, "_fetch_conversation_history", lambda *args, **kwargs: []
+        process_text_module, "call_bedrock_agent", fake_call_bedrock_agent
     )
-    monkeypatch.setattr(
-        process_text_module, "format_order_progress_summary", lambda *_: None
-    )
+
+    event = _base_event()
+    event["from_number"] = "972500000000"
+    event["whatsapp_id"] = "wamid.example"
+    event["customer_info"] = {
+        "details": {"first_name": "Dana", "event_date": "2025-01-01"}
+    }
+
+    process_text_module.ProcessText(event).process_text()
+
+    input_text = captured.get("input_text", "")
+    assert "פרטי משתמש ידועים" in input_text
+    assert "first_name: Dana" in input_text
+    assert "event_date: 2025-01-01" in input_text
+    assert "לקוח: שלום" in input_text
+
+
+def test_process_text_merges_customer_info_without_persisting(monkeypatch):
     monkeypatch.setattr(
         process_text_module,
         "call_bedrock_agent",
@@ -67,26 +82,46 @@ def test_process_text_persists_user_updates(monkeypatch):
             {
                 "reply": "תודה",
                 "user_updates": [
-                    {"tag": "profile.first_name", "value": "דנה"},
-                    {"tag": "conversation.date_of_event", "value": "2025-01-01"},
+                    {"tag": "conversation.delivery_eta", "value": "tomorrow"},
+                    {"tag": "profile.first_name", "value": "Dana"},
                 ],
             }
         ),
     )
 
     event = _base_event()
+    event["customer_info"] = {"details": {"first_name": "Dana"}}
+
     result = process_text_module.ProcessText(event).process_text()
 
     assert result["response_message"].startswith("תודה")
-    assert result["conversation_state"]["date_of_event"] == "2025-01-01"
+    assert result["conversation_state"]["delivery_eta"] == "tomorrow"
     assert result["user_updates"] == [
-        {"tag": "profile.first_name", "value": "דנה"},
-        {"tag": "conversation.date_of_event", "value": "2025-01-01"},
+        {"tag": "conversation.delivery_eta", "value": "tomorrow"},
+        {"tag": "profile.first_name", "value": "Dana"},
     ]
 
-    # Two calls are expected: one to touch the record and one to persist profile updates.
-    assert len(stub_table.update_calls) >= 2
-    update_expression = stub_table.update_calls[-1]["UpdateExpression"]
-    assert "#info." in update_expression
-    expression_values = stub_table.update_calls[-1]["ExpressionAttributeValues"]
-    assert any(value == "דנה" for value in expression_values.values())
+
+def test_process_text_includes_stored_user_info_in_context(monkeypatch):
+    captured: Dict[str, str] = {}
+
+    def fake_call_bedrock_agent(**kwargs):
+        captured.update(kwargs)
+        return ""
+
+    monkeypatch.setattr(
+        process_text_module, "call_bedrock_agent", fake_call_bedrock_agent
+    )
+    monkeypatch.setattr(
+        process_text_module, "_load_user_info_details", lambda *_: {"name": "Dana"}
+    )
+
+    event = _base_event()
+    event["from_number"] = "972500000000"
+
+    process_text_module.ProcessText(event).process_text()
+
+    input_text = captured.get("input_text", "")
+    assert "פרטי משתמש ידועים" in input_text
+    assert "name: Dana" in input_text
+    assert "phone_number: 972500000000" in input_text

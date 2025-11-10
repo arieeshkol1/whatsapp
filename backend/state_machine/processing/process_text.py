@@ -25,17 +25,9 @@ from common.rules_config import get_rules_text
 
 from state_machine.processing.bedrock_agent import call_bedrock_agent
 
-# DynamoDB attribute names for the UsersInfo table (match unit test expectations)
-USER_INFO_ATTRIBUTE = "Details"
-PROFILE_ATTRIBUTE = "Profile"
-COLLECTED_FIELDS_ATTRIBUTE = "CollectedFields"
 MAX_SESSION_ID_LENGTH = 256
 
-__all__ = [
-    "ProcessText",
-    "USER_INFO_ATTRIBUTE",
-    "COLLECTED_FIELDS_ATTRIBUTE",
-]
+__all__ = ["ProcessText"]
 
 logger = custom_logger()
 
@@ -51,6 +43,18 @@ _history_helper = (
 )
 
 _users_info_table = None
+
+
+def _extract_customer_details(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Return customer details payload provided by the Assess Changes step."""
+
+    customer_info = event.get("customer_info")
+    if not isinstance(customer_info, dict):
+        return {}
+
+    raw_details = customer_info.get("details") or customer_info.get("user_info_details")
+
+    return raw_details if isinstance(raw_details, dict) else {}
 
 SENSITIVE_CONVERSATION_STATE_KEYS = {
     "customer_first_name",
@@ -119,29 +123,6 @@ def _get_users_info_table():
     return _users_info_table
 
 
-def _load_user_info_profile(phone_number: Optional[str]) -> Dict[str, Any]:
-    """
-    Load the Details map (USER_INFO_ATTRIBUTE) from UsersInfo table.
-    """
-    table = _get_users_info_table()
-    normalized = _normalize_phone(phone_number)
-    if not table or not normalized:
-        return {}
-
-    try:
-        response = table.get_item(Key={"PhoneNumber": normalized})
-    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to load UsersInfo profile")
-        return {}
-
-    item = response.get("Item") if isinstance(response, dict) else None
-    if not isinstance(item, dict):
-        return {}
-
-    profile = item.get(USER_INFO_ATTRIBUTE)
-    return profile if isinstance(profile, dict) else {}
-
-
 def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
     table = _get_users_info_table()
     normalized = _normalize_phone(phone_number)
@@ -158,126 +139,13 @@ def _load_user_info_details(phone_number: Optional[str]) -> Dict[str, Any]:
     if not isinstance(item, dict):
         return {}
 
-    details = item.get("Details")
-    if isinstance(details, dict):
-        return details
+    name = item.get("Name")
+    if isinstance(name, str):
+        stripped = name.strip()
+        if stripped:
+            return {"name": stripped}
 
-    profile = item.get("Profile")
-    return profile if isinstance(profile, dict) else {}
-
-
-def _touch_user_info_record(
-    phone_number: Optional[str], last_seen_at: Optional[Any]
-) -> None:
-    table = _get_users_info_table()
-    normalized = _normalize_phone(phone_number)
-    if not table or not normalized:
-        return
-
-    try:
-        table.update_item(
-            Key={"PhoneNumber": normalized},
-            UpdateExpression=(
-                "SET #info = if_not_exists(#info, :empty), "
-                "Details = if_not_exists(Details, :empty), "
-                "Profile = if_not_exists(Profile, :empty), "
-                "#collected = if_not_exists(#collected, :empty), "
-                "CollectedFields = if_not_exists(CollectedFields, :empty), "
-                "updated_at = :updated_at, last_seen_at = :last_seen"
-            ),
-            ExpressionAttributeNames={
-                "#info": USER_INFO_ATTRIBUTE,  # "Details"
-                "#collected": COLLECTED_FIELDS_ATTRIBUTE,  # "CollectedFields"
-            },
-            ExpressionAttributeValues={
-                ":empty": {},
-                ":updated_at": datetime.utcnow().isoformat(),
-                ":last_seen": _as_epoch_decimal(last_seen_at),
-            },
-        )
-    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to touch UsersInfo record")
-
-
-def _update_user_info_profile(
-    phone_number: Optional[str],
-    updates: Dict[str, Any],
-    last_seen_at: Optional[Any],
-) -> None:
-    if not updates:
-        return
-
-    table = _get_users_info_table()
-    normalized = _normalize_phone(phone_number)
-    if not table or not normalized:
-        return
-
-    cleaned_updates = {
-        key: value for key, value in updates.items() if value not in (None, "", [])
-    }
-
-    if not cleaned_updates:
-        return
-
-    expression_names = {
-        "#info": USER_INFO_ATTRIBUTE,  # ADD THIS
-        "#details": USER_INFO_ATTRIBUTE,
-        "#profile": PROFILE_ATTRIBUTE,
-        "#collected": COLLECTED_FIELDS_ATTRIBUTE,
-    }
-    expression_values: Dict[str, Any] = {
-        ":empty": {},
-        ":true": True,
-        ":updated_at": datetime.utcnow().isoformat(),
-        ":last_seen": _as_epoch_decimal(last_seen_at),
-    }
-    set_fragments = [
-        "#info = if_not_exists(#info, :empty)",  # ADD THIS
-        "#details = if_not_exists(#details, :empty)",
-        "Details = if_not_exists(Details, :empty)",
-        "#profile = if_not_exists(#profile, :empty)",
-        "Profile = if_not_exists(Profile, :empty)",
-        "#collected = if_not_exists(#collected, :empty)",
-        "CollectedFields = if_not_exists(CollectedFields, :empty)",
-        "updated_at = :updated_at",
-        "last_seen_at = :last_seen",
-    ]
-
-    for index, (path, value) in enumerate(cleaned_updates.items()):
-        segments = [segment for segment in str(path).split(".") if segment]
-        if not segments:
-            continue
-
-        value_token = f":value{index}"
-        expression_values[value_token] = value
-
-        profile_tokens: List[str] = []
-        for segment_index, segment in enumerate(segments):
-            token = (
-                f"#field{index}"
-                if len(segments) == 1
-                else f"#field{index}_{segment_index}"
-            )
-            expression_names[token] = segment
-            profile_tokens.append(token)
-
-        profile_path = ".".join(profile_tokens)
-        set_fragments.append(f"#info.{profile_path} = {value_token}")  # ADD THIS
-        set_fragments.append(f"#details.{profile_path} = {value_token}")
-        set_fragments.append(f"#profile.{profile_path} = {value_token}")
-        set_fragments.append(f"#collected.{profile_path} = :true")
-
-    update_expression = "SET " + ", ".join(set_fragments)
-
-    try:
-        table.update_item(
-            Key={"PhoneNumber": normalized},
-            UpdateExpression=update_expression,
-            ExpressionAttributeNames=expression_names,
-            ExpressionAttributeValues=expression_values,
-        )
-    except (ClientError, BotoCoreError):  # pragma: no cover - runtime protection
-        logger.exception("Failed to update UsersInfo profile")
+    return {}
 
 
 def _normalise_user_update_entries(raw_updates: Any) -> List[Dict[str, Any]]:
@@ -397,16 +265,6 @@ def _conversation_state_updates_from_tags(
             state_updates["guest_count"] = guest_count
 
     return state_updates
-
-
-def _update_user_info_details(
-    phone_number: Optional[str],
-    state: Dict[str, Any],
-    last_seen_at: Optional[Any],
-) -> None:
-    # Currently a no-op persistence placeholder. Left intentionally simple.
-    # We only sanitize state before storing conversation_state to history.
-    return None
 
 
 def _sanitize_conversation_state(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -529,7 +387,7 @@ class ProcessText(BaseStepFunction):
         if not last_seen_at:
             last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
 
-        _touch_user_info_record(from_number, last_seen_at or datetime.utcnow())
+        assess_customer_details = _extract_customer_details(self.event)
 
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
@@ -539,8 +397,15 @@ class ProcessText(BaseStepFunction):
             format_customer_summary(customer_profile) if customer_profile else None
         )
 
-        stored_user_profile = _load_user_info_profile(from_number)
-        user_profile_context = _format_user_info_for_context(stored_user_profile)
+        stored_user_info = _load_user_info_details(from_number)
+        combined_customer_info: Dict[str, Any] = {}
+        if isinstance(stored_user_info, dict):
+            combined_customer_info.update(stored_user_info)
+        if assess_customer_details:
+            combined_customer_info.update(assess_customer_details)
+        if from_number:
+            combined_customer_info.setdefault("phone_number", from_number)
+        user_info_context = _format_user_info_for_context(combined_customer_info)
 
         partition_key = f"NUMBER#{from_number}" if from_number else None
         conversation_state: Dict[str, Any] = {}
@@ -558,17 +423,9 @@ class ProcessText(BaseStepFunction):
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to fetch conversation state")
 
-        user_info_details = _load_user_info_details(from_number)
-        if user_info_details:
+        if combined_customer_info:
             for key, value in _conversation_state_updates_from_tags(
-                user_info_details
-            ).items():
-                prompt_state[key] = value
-
-        user_info_profile = _load_user_info_profile(from_number)
-        if user_info_profile:
-            for key, value in _conversation_state_updates_from_tags(
-                user_info_profile
+                combined_customer_info
             ).items():
                 prompt_state.setdefault(key, value)
 
@@ -597,8 +454,6 @@ class ProcessText(BaseStepFunction):
 
         order_progress_summary_for_prompt = format_order_progress_summary(prompt_state)
 
-        _update_user_info_details(from_number, prompt_state, last_seen_at)
-
         self.logger.info(
             "Prepared conversation context",
             extra={
@@ -621,14 +476,14 @@ class ProcessText(BaseStepFunction):
         if order_progress_summary_for_prompt:
             context_sections.append(order_progress_summary_for_prompt)
 
+        if user_info_context:
+            context_sections.append(user_info_context)
+
         if history_lines:
             history_block = "\n".join(history_lines)
             context_sections.append(
                 f"היסטוריית השיחה עבור הנושא הנוכחי:\n{history_block}"
             )
-
-        if user_profile_context:
-            context_sections.append(user_profile_context)
 
         context_sections.append(f"הודעת הלקוח כעת:\n{self.text}")
 
@@ -685,8 +540,6 @@ class ProcessText(BaseStepFunction):
         self.response_message = unescape(reply_text)
 
         if profile_updates or conversation_tag_updates:
-            if profile_updates:
-                _update_user_info_profile(from_number, profile_updates, last_seen_at)
             agent_state_updates = _conversation_state_updates_from_tags(
                 {**profile_updates, **conversation_tag_updates}
             )
@@ -698,18 +551,6 @@ class ProcessText(BaseStepFunction):
                 if sanitized_state != conversation_state:
                     conversation_state = sanitized_state
                     conversation_state_dirty = True
-
-        _update_user_info_details(from_number, prompt_state, last_seen_at)
-
-        if conversation_state_dirty and partition_key and _history_helper:
-            try:
-                _history_helper.put_conversation_state(
-                    partition_key,
-                    conversation_id,
-                    conversation_state,
-                )
-            except Exception:  # pragma: no cover - defensive logging
-                logger.exception("Failed to persist conversation state")
 
         final_order_progress_summary = format_order_progress_summary(prompt_state)
 
