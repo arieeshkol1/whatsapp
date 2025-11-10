@@ -735,7 +735,7 @@ class ChatbotAPIStack(Stack):
         self.v2_task_assess_changes = aws_sfn_tasks.LambdaInvoke(
             self,
             "TaskV2-AssessChanges",
-            state_name="Assess Changes",
+            state_name="Enrich Message Context",
             lambda_function=self.lambda_state_machine_process_message,
             payload=aws_sfn.TaskInput.from_object(
                 {
