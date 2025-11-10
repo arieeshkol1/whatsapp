@@ -223,7 +223,7 @@ def _partition_user_update_entries(
 
 
 def _conversation_state_updates_from_tags(
-    tagged_updates: Dict[str, Any]
+    tagged_updates: Dict[str, Any],
 ) -> Dict[str, Any]:
     if not tagged_updates:
         return {}
