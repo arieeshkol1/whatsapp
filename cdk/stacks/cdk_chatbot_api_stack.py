@@ -735,7 +735,7 @@ class ChatbotAPIStack(Stack):
         self.v2_task_assess_changes = aws_sfn_tasks.LambdaInvoke(
             self,
             "TaskV2-AssessChanges",
-            state_name="Assess Changes",
+            state_name="Enrich Message Context",
             lambda_function=self.lambda_state_machine_process_message,
             payload=aws_sfn.TaskInput.from_object(
                 {
@@ -894,7 +894,7 @@ class ChatbotAPIStack(Stack):
         # TODO: Add failure handling for the State Machine with "process_failure"
         # self.task_process_failure.next(self.task_failure)
 
-        # Conditions and definition for the V2 state machine (includes Assess Changes step).
+        # Conditions and definition for the V2 state machine (includes Enrich Message Context step).
         self.choice_text_v2 = aws_sfn.Condition.string_equals("$.message_type", "text")
         self.choice_image_v2 = aws_sfn.Condition.string_equals(
             "$.message_type", "image"
@@ -924,8 +924,8 @@ class ChatbotAPIStack(Stack):
 
         self.v2_choice_assess_changes = aws_sfn.Choice(
             self,
-            "Assess Changes Enabled?",
-            comment="Routes through AssessChanges when feature flag is enabled",
+            "Enrich Message Context Enabled?",
+            comment="Routes through EnrichMessageContext (AssessChanges) when feature flag is enabled",
         )
         self.v2_choice_assess_changes.when(
             self.assess_changes_enabled_condition,
