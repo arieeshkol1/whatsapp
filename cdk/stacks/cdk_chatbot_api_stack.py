@@ -9,6 +9,7 @@ MODELS_REQUIRING_INFERENCE_PROFILE = {
 }
 
 USERS_INFO_TABLE_DEFAULT_NAME = "UsersInfo"
+USER_DATA_TABLE_DEFAULT_NAME = "UserData"
 
 # External imports
 from aws_cdk import (
@@ -84,6 +85,7 @@ class ChatbotAPIStack(Stack):
         self.import_secrets()
         self.create_dynamodb_table()
         self.create_users_info_table()
+        self.create_user_data_table()  # NEW: UserData table
         self.create_lambda_layers()
         self.create_lambda_functions()
         self.create_dynamodb_streams()
@@ -128,14 +130,13 @@ class ChatbotAPIStack(Stack):
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
 
     def create_users_info_table(self) -> None:
-        """Reference the pre-existing UsersInfo DynamoDB table."""
-
+        """Create (or name-reserve) the UsersInfo DynamoDB table."""
+        # Support both keys for backwards compatibility, preferring explicit USER_INFO_TABLE
         users_info_table_name = self.app_config.get(
-            "users_info_table_name", "UsersInfo"
+            "users_info_table_name", USERS_INFO_TABLE_DEFAULT_NAME
         )
-
         users_info_table_name = self.app_config.get(
-            "USER_INFO_TABLE", USERS_INFO_TABLE_DEFAULT_NAME
+            "USER_INFO_TABLE", users_info_table_name
         )
 
         self.users_info_table = aws_dynamodb.Table(
@@ -149,6 +150,28 @@ class ChatbotAPIStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
         Tags.of(self.users_info_table).add("Name", users_info_table_name)
+
+    def create_user_data_table(self) -> None:
+        """NEW: Create UserData DynamoDB table (PK=PhoneNumber, flexible JSON attributes)."""
+        # Allow override via either key
+        user_data_table_name = self.app_config.get(
+            "user_data_table_name", USER_DATA_TABLE_DEFAULT_NAME
+        )
+        user_data_table_name = self.app_config.get(
+            "USER_DATA_TABLE", user_data_table_name
+        )
+
+        self.user_data_table = aws_dynamodb.Table(
+            self,
+            "DynamoDB-Table-UserData",
+            table_name=user_data_table_name,
+            partition_key=aws_dynamodb.Attribute(
+                name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
+            ),
+            billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        Tags.of(self.user_data_table).add("Name", user_data_table_name)
 
     def create_lambda_layers(self) -> None:
         """
@@ -257,6 +280,10 @@ class ChatbotAPIStack(Stack):
             self.users_info_table.grant_read_write_data(
                 self.lambda_state_machine_process_message
             )
+        if hasattr(self, "user_data_table"):
+            self.user_data_table.grant_read_write_data(
+                self.lambda_state_machine_process_message
+            )
         if self.rules_dynamodb_table:
             self.rules_dynamodb_table.grant_read_data(
                 self.lambda_state_machine_process_message
@@ -267,13 +294,20 @@ class ChatbotAPIStack(Stack):
             "dynamodb:UpdateItem",
             "dynamodb:DescribeTable",
         ]
-        self.lambda_state_machine_process_message.add_to_role_policy(
-            aws_iam.PolicyStatement(
-                effect=aws_iam.Effect.ALLOW,
-                actions=dynamodb_actions,
-                resources=[self.users_info_table.table_arn],
+        # Allow explicit access by ARN as well (in addition to grant helpers)
+        resources_arns = []
+        if hasattr(self, "users_info_table"):
+            resources_arns.append(self.users_info_table.table_arn)
+        if hasattr(self, "user_data_table"):
+            resources_arns.append(self.user_data_table.table_arn)
+        if resources_arns:
+            self.lambda_state_machine_process_message.add_to_role_policy(
+                aws_iam.PolicyStatement(
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=dynamodb_actions,
+                    resources=resources_arns,
+                )
             )
-        )
         if self.rules_dynamodb_table:
             self.lambda_state_machine_process_message.add_to_role_policy(
                 aws_iam.PolicyStatement(
@@ -355,6 +389,12 @@ class ChatbotAPIStack(Stack):
             "USER_INFO_TABLE": self.app_config.get(
                 "USER_INFO_TABLE", self.users_info_table.table_name
             ),
+            "USER_DATA_TABLE": self.app_config.get(
+                "USER_DATA_TABLE",
+                getattr(self, "user_data_table").table_name
+                if hasattr(self, "user_data_table")
+                else USER_DATA_TABLE_DEFAULT_NAME,
+            ),
         }
 
         optional_values: Dict[str, Optional[str]] = {
@@ -364,6 +404,9 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "USER_INFO_TABLE": self.users_info_table.table_name
             if hasattr(self, "users_info_table")
+            else None,
+            "USER_DATA_TABLE": self.user_data_table.table_name
+            if hasattr(self, "user_data_table")
             else None,
         }
 
@@ -1113,7 +1156,11 @@ class ChatbotAPIStack(Stack):
                 ),
             ],
         )
+        # Grant Bedrock Agent role access to user tables (UsersInfo + UserData)
         self.users_info_table.grant_read_write_data(bedrock_agent_role)
+        if hasattr(self, "user_data_table"):
+            self.user_data_table.grant_read_write_data(bedrock_agent_role)
+
         # Add additional IAM actions for the bedrock agent
         bedrock_agent_role.add_to_policy(
             aws_iam.PolicyStatement(
@@ -1153,7 +1200,7 @@ class ChatbotAPIStack(Stack):
                 destination_key_prefix="docs/",
             )
 
-            # Create opensearch serverless collection requires a security policy of type encryption. The policy must be a string and the resource contains the collections it is applied to.
+            # Create opensearch serverless policies and collection...
             opensearch_serverless_encryption_policy = oss.CfnSecurityPolicy(
                 self,
                 "OpenSearchServerlessEncryptionPolicy",
@@ -1163,7 +1210,6 @@ class ChatbotAPIStack(Stack):
                 description="Encryption policy for the opensearch serverless collection",
             )
 
-            # We also need a security policy of type network so that the collection becomes accessable. The policy must be a string and the resource contains the collections it is applied to.
             opensearch_serverless_network_policy = oss.CfnSecurityPolicy(
                 self,
                 "OpenSearchServerlessNetworkPolicy",
@@ -1173,7 +1219,6 @@ class ChatbotAPIStack(Stack):
                 description="Network policy for the opensearch serverless collection",
             )
 
-            # Create the OpenSearch Collection
             opensearch_serverless_collection = oss.CfnCollection(
                 self,
                 "OpenSearchCollection-KB ",
@@ -1190,7 +1235,6 @@ class ChatbotAPIStack(Stack):
                 opensearch_serverless_network_policy
             )
 
-            # Role for the Bedrock KB
             bedrock_kb_role = aws_iam.Role(
                 self,
                 "IAMRole-BedrockKB",
@@ -1216,12 +1260,9 @@ class ChatbotAPIStack(Stack):
                 ],
             )
 
-            # Create a Custom Resource for the OpenSearch Index (not supported by CDK yet)
-            # TODO: Replace to L1 or L2 construct when available!!!!!!
-            # Define the index name
+            # Custom resource to create index in AOSS
             index_name = "kb-docs"
 
-            # Define the Lambda function that creates a new index in the opensearch serverless collection
             create_index_lambda = aws_lambda.Function(
                 self,
                 "Index",
@@ -1237,7 +1278,6 @@ class ChatbotAPIStack(Stack):
                 layers=[self.lambda_layer_common],  # To add requests library
             )
 
-            # Define IAM permission policy for the Lambda function. This function calls the OpenSearch Serverless API to create a new index in the collection and must have the "aoss" permissions.
             create_index_lambda.role.add_to_principal_policy(
                 aws_iam.PolicyStatement(
                     effect=aws_iam.Effect.ALLOW,
@@ -1254,7 +1294,6 @@ class ChatbotAPIStack(Stack):
                 )
             )
 
-            # Finally we can create a complete data access policy for the collection that also includes the lambda function that will create the index. The policy must be a string and the resource contains the collections it is applied to.
             opensearch_serverless_access_policy = oss.CfnAccessPolicy(
                 self,
                 "OpenSearchServerlessAccessPolicy",
@@ -1264,18 +1303,15 @@ class ChatbotAPIStack(Stack):
                 description="Data access policy for the opensearch serverless collection",
             )
 
-            # Add dependencies to the collection
             opensearch_serverless_collection.add_dependency(
                 opensearch_serverless_access_policy
             )
 
-            # Define the request body for the lambda invoke api call that the custom resource will use
             aossLambdaParams = {
                 "FunctionName": create_index_lambda.function_name,
                 "InvocationType": "RequestResponse",
             }
 
-            # On creation of the stack, trigger the Lambda function we just defined
             trigger_lambda_cr = cr.AwsCustomResource(
                 self,
                 "IndexCreateCustomResource",
@@ -1292,7 +1328,6 @@ class ChatbotAPIStack(Stack):
                 timeout=Duration.seconds(300),
             )
 
-            # Define IAM permission policy for the custom resource
             trigger_lambda_cr.grant_principal.add_to_principal_policy(
                 aws_iam.PolicyStatement(
                     effect=aws_iam.Effect.ALLOW,
@@ -1301,11 +1336,9 @@ class ChatbotAPIStack(Stack):
                 )
             )
 
-            # Only trigger the custom resource after the opensearch access policy has been applied to the collection
             trigger_lambda_cr.node.add_dependency(opensearch_serverless_access_policy)
             trigger_lambda_cr.node.add_dependency(opensearch_serverless_collection)
 
-            # Create the Bedrock KB
             bedrock_knowledge_base = aws_bedrock.CfnKnowledgeBase(
                 self,
                 "BedrockKB",
@@ -1324,19 +1357,17 @@ class ChatbotAPIStack(Stack):
                         collection_arn=opensearch_serverless_collection.attr_arn,
                         vector_index_name=index_name,
                         field_mapping=aws_bedrock.CfnKnowledgeBase.OpenSearchServerlessFieldMappingProperty(
-                            metadata_field="AMAZON_BEDROCK_METADATA",  # Must match to Lambda Function
-                            text_field="AMAZON_BEDROCK_TEXT_CHUNK",  # Must match to Lambda Function
-                            vector_field="bedrock-knowledge-base-default-vector",  # Must match to Lambda Function
+                            metadata_field="AMAZON_BEDROCK_METADATA",
+                            text_field="AMAZON_BEDROCK_TEXT_CHUNK",
+                            vector_field="bedrock-knowledge-base-default-vector",
                         ),
                     ),
                 ),
             )
 
-            # Add dependencies to the KB
             bedrock_knowledge_base.add_dependency(opensearch_serverless_collection)
             bedrock_knowledge_base.node.add_dependency(trigger_lambda_cr)
 
-            # Create the datasource for the bedrock KB
             bedrock_data_source = aws_bedrock.CfnDataSource(
                 self,
                 "Bedrock-DataSource",
@@ -1359,13 +1390,8 @@ class ChatbotAPIStack(Stack):
                     )
                 ),
             )
-            # Only trigger the custom resource when the kb is completed
             bedrock_data_source.node.add_dependency(bedrock_knowledge_base)
 
-        # # TODO: Add the automation for the KB ingestion
-        # # ... (manual for now when docs refreshed... could be automated)
-
-        # Create the Bedrock Agent with KB and Agent Groups
         foundation_model_identifier = (
             self.bedrock_agent_inference_profile_arn
             or self.bedrock_agent_foundation_model_id
@@ -1377,7 +1403,6 @@ class ChatbotAPIStack(Stack):
             agent_name=f"{self.main_resources_name}-havitush-agent",
             agent_resource_role_arn=bedrock_agent_role.role_arn,
             description="Conversational agent for the Havitush online drinks store.",
-            # Amazon Nova Lite model configured for fast, high-quality responses.
             foundation_model=self.bedrock_agent_effective_foundation_model_id,
             instruction="""
 הגדרת התפקיד ושפת הדיבור – הסוכן מזוהה כ"חביתוש – הסוכן הדיגיטלי להזמנות בירה טרייה מהחבית", ומחויב לשוחח תמיד בעברית חמה ומזמינה תוך שמירה על מקצועיות ושקיפות.
@@ -1500,9 +1525,6 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
         )
 
         if self.bedrock_agent_inference_profile_arn:
-            # The CloudFormation property was introduced before CDK exposed a typed field.
-            # Manually override the synthesized template so Bedrock uses the required
-            # inference profile when invoking the foundation model.
             self.bedrock_agent.add_override(
                 "Properties.InferenceProfileArn",
                 self.bedrock_agent_inference_profile_arn,
@@ -1522,7 +1544,6 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
         agent_alias_string = cfn_agent_alias.ref
 
         # Create SSM Parameters for the agent alias to use in the Lambda functions
-        # Note: can not be added as Env-Vars due to circular dependency. Thus, SSM Params (decouple)
         aws_ssm.StringParameter(
             self,
             "SSMAgentAlias",
