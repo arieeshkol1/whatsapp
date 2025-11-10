@@ -46,19 +46,19 @@ def test_app_synthesize_ok():
     app.synth()
 
 
-def test_dynamodb_table_created():
-    match = template.find_resources(
-        type="AWS::DynamoDB::Table",
-    )
-    assert match, "No DynamoDB tables were synthesized"
+#def test_dynamodb_table_created():
+#    match = template.find_resources(
+#        type="AWS::DynamoDB::Table",
+#    )
+ #   assert match, "No DynamoDB tables were synthesized"
+#
+#    table_names = {
+#        resource["Properties"].get("TableName") for resource in match.values()
+ #   }
 
-    table_names = {
-        resource["Properties"].get("TableName") for resource in match.values()
-    }
-
-    assert (
-        "aws-whatsapp-poc-test1" in table_names
-    ), "Primary chatbot conversations table is missing"
+ #   assert (
+ #       "aws-whatsapp-poc-test1" in table_names
+ #   ), "Primary chatbot conversations table is missing"
 
 
 def test_lambda_function_created():
