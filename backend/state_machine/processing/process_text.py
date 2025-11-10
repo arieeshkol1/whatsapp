@@ -56,6 +56,7 @@ def _extract_customer_details(event: Dict[str, Any]) -> Dict[str, Any]:
 
     return raw_details if isinstance(raw_details, dict) else {}
 
+
 SENSITIVE_CONVERSATION_STATE_KEYS = {
     "customer_first_name",
     "customer_last_name",
@@ -228,17 +229,25 @@ def _conversation_state_updates_from_tags(
     if not tagged_updates:
         return {}
 
-    updates = tagged_updates
+    remaining = {
+        key: value
+        for key, value in tagged_updates.items()
+        if value not in (None, "", [])
+    }
+
+    for ignorable in ("name", "phone_number"):
+        remaining.pop(ignorable, None)
+
     state_updates: Dict[str, Any] = {}
 
-    first_name = updates.get("first_name")
-    last_name = updates.get("last_name")
-    full_name = updates.get("full_name")
-    email = updates.get("email")
-    company = updates.get("company")
-    date_of_event = updates.get("date_of_event")
-    event_address = updates.get("event_address")
-    guest_count = updates.get("guest_count")
+    first_name = remaining.pop("first_name", None)
+    last_name = remaining.pop("last_name", None)
+    full_name = remaining.pop("full_name", None)
+    email = remaining.pop("email", None)
+    company = remaining.pop("company", None)
+    date_of_event = remaining.pop("date_of_event", None)
+    event_address = remaining.pop("event_address", None)
+    guest_count = remaining.pop("guest_count", None)
 
     if first_name:
         state_updates["customer_first_name"] = first_name
@@ -263,6 +272,9 @@ def _conversation_state_updates_from_tags(
             state_updates["guest_count"] = int(guest_count)
         except (ValueError, TypeError):
             state_updates["guest_count"] = guest_count
+
+    for key, value in remaining.items():
+        state_updates[key] = value
 
     return state_updates
 

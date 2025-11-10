@@ -17,10 +17,12 @@ def patch_dependencies(monkeypatch):
         process_text_module, "extract_state_updates_from_message", lambda *_: {}
     )
     monkeypatch.setattr(
-        process_text_module, "merge_conversation_state", lambda state, updates: {
+        process_text_module,
+        "merge_conversation_state",
+        lambda state, updates: {
             **state,
             **updates,
-        }
+        },
     )
     monkeypatch.setattr(
         process_text_module, "format_order_progress_summary", lambda *_: None
@@ -71,7 +73,7 @@ def test_process_text_includes_assess_changes_details(monkeypatch):
     assert "פרטי משתמש ידועים" in input_text
     assert "first_name: Dana" in input_text
     assert "event_date: 2025-01-01" in input_text
-    assert "לקוח: שלום" in input_text
+    assert "הודעת הלקוח כעת:\nשלום" in input_text
 
 
 def test_process_text_merges_customer_info_without_persisting(monkeypatch):
