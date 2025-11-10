@@ -32,6 +32,9 @@ requests = "^2.32.3"
 minversion = "7.0"
 pythonpath = ["cdk", "backend"]
 
+[tool.poetry.plugins."poetry.application.plugin"]
+packaging_licenses = "backend.state_machine:PackagingLicensesPlugin"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
