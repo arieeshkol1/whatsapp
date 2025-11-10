@@ -362,9 +362,11 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
-            "USER_INFO_TABLE": self.users_info_table.table_name
-            if hasattr(self, "users_info_table")
-            else None,
+            "USER_INFO_TABLE": (
+                self.users_info_table.table_name
+                if hasattr(self, "users_info_table")
+                else None
+            ),
         }
 
         for key, value in optional_values.items():

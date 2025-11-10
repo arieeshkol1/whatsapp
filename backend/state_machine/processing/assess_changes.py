@@ -10,8 +10,8 @@ from botocore.exceptions import ClientError
 from common.logger import custom_logger
 
 # Adjusted for your real table schema
-USER_INFO_TABLE_NAME = "UserInfo"          # DynamoDB table name
-USER_INFO_PK_NAME = "PhoneNumber"          # Primary key attribute
+USER_INFO_TABLE_NAME = "UserInfo"  # DynamoDB table name
+USER_INFO_PK_NAME = "PhoneNumber"  # Primary key attribute
 
 
 class AssessChanges:
@@ -38,7 +38,9 @@ class AssessChanges:
         try:
             item = self._get_user_info_item(phone)
         except Exception as exc:
-            self.logger.exception("AssessChanges: failed to read UserInfo for %s: %s", phone, exc)
+            self.logger.exception(
+                "AssessChanges: failed to read UserInfo for %s: %s", phone, exc
+            )
             return self.event
 
         if not item:
