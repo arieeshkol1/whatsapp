@@ -61,8 +61,8 @@ class AssessChanges:
         self.logger = logger
         self._endpoint_url = os.environ.get("ENDPOINT_URL")
         self._user_data_table_name = os.environ.get("USER_DATA_TABLE")
-        self._conversation_table_name = os.environ.get("DYNAMODB_TABLE") or os.environ.get(
-            "TABLE_NAME"
+        self._conversation_table_name = (
+            os.environ.get("DYNAMODB_TABLE") or os.environ.get("TABLE_NAME")
         )
 
         self._dynamodb_resource = None
@@ -148,7 +148,9 @@ class AssessChanges:
                 else:
                     self._dynamodb_resource = boto3.resource("dynamodb")
             except Exception:  # pragma: no cover - defensive guard
-                self.logger.exception("Failed to initialise DynamoDB resource for AssessChanges")
+                self.logger.exception(
+                    "Failed to initialise DynamoDB resource for AssessChanges"
+                )
                 self._dynamodb_resource = None
         return self._dynamodb_resource
 
@@ -165,7 +167,9 @@ class AssessChanges:
             table = dynamodb.Table(self._user_data_table_name)
             response = table.get_item(Key={"PhoneNumber": normalized_phone})
         except (ClientError, BotoCoreError):
-            self.logger.exception("Failed to read user data", extra={"phone": normalized_phone})
+            self.logger.exception(
+                "Failed to read user data", extra={"phone": normalized_phone}
+            )
             return None
         except Exception:  # pragma: no cover - unexpected runtime error
             self.logger.exception(
