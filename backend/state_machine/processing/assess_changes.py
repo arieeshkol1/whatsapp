@@ -16,11 +16,10 @@ Change log:
 - Make DynamoDB resource region-safe for tests/CI (default: us-east-1).
 - Tolerate bad stored PKs (e.g., trailing newline / missing '+') when reading.
 - Canonicalize returned item to strip whitespace from PhoneNumber and Name.
-- Expose RULESET_VERSION and MIN_INTL_DIGITS via env.
+- Expose RULESET_VERSION, MIN_INTL_DIGITS, and history controls via env.
 - Clearer flag evaluation + logging for easier ops.
-- NEW: newest-first history (ScanIndexForward=False) and size limit via env.
-- NEW: add a compact conversation_summary block.
-- NEW: expose rules JSON under assess_changes["rules"] for easy consumption.
+- New: inline rules mirror under assess_changes["rules"].
+- New: newest-first conversation query with summary.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 
 from common.logger import custom_logger
@@ -93,7 +92,8 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
 
 
 def _key_variants(e164: str) -> List[str]:
-    """Generate robust variants for lookup to tolerate bad stored keys.
+    """
+    Generate robust variants for lookup to tolerate bad stored keys.
     Order matters; first successful match wins.
     """
     variants: List[str] = []
@@ -160,15 +160,13 @@ def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
-    _CONVERSATION_QUERY_LIMIT = _HISTORY_LIMIT
-
     def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
         self.event = event if isinstance(event, dict) else {}
         self.logger = logger
         self._endpoint_url = os.environ.get("ENDPOINT_URL")
         self._user_data_table_name = os.environ.get("USER_DATA_TABLE")
-        self._conversation_table_name = (
-            os.environ.get("DYNAMODB_TABLE") or os.environ.get("TABLE_NAME")
+        self._conversation_table_name = os.environ.get("DYNAMODB_TABLE") or os.environ.get(
+            "TABLE_NAME"
         )
         self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
             "RULES_TABLE"
@@ -176,20 +174,6 @@ class AssessChanges:
         self._rules_version = os.environ.get("RULESET_VERSION", "CURRENT")
 
         self._dynamodb_resource = None
-
-        # Helpful diagnostics if env is missing
-        if not self._conversation_table_name:
-            self.logger.warning(
-                "AssessChanges: DYNAMODB_TABLE/TABLE_NAME missing; history disabled"
-            )
-        if not self._rules_table_name:
-            self.logger.debug(
-                "AssessChanges: RULES_TABLE_NAME/RULES_TABLE missing; rules disabled"
-            )
-        if not self._user_data_table_name:
-            self.logger.debug(
-                "AssessChanges: USER_DATA_TABLE missing; profile disabled"
-            )
 
     # ------------------------------------------------------------------
     def assess_and_apply(self) -> Dict[str, Any]:
@@ -235,9 +219,8 @@ class AssessChanges:
             if not isinstance(payload, dict):
                 payload = {}
                 self.event["assess_changes"] = payload
-
-            # --- user profile ---
             if user_data_record is not None:
+                # Canonicalize and copy selected fields
                 pn = user_data_record.get("PhoneNumber")
                 if isinstance(pn, str):
                     user_data_record["PhoneNumber"] = pn.strip()
@@ -256,6 +239,7 @@ class AssessChanges:
                 ):
                     payload["user_name"] = user_data_record["Name"]
 
+                # Avoid reserved LogRecord keys (e.g., "name")
                 self.logger.debug(
                     "AssessChanges user_data loaded",
                     extra={
@@ -265,21 +249,18 @@ class AssessChanges:
                         "has_name": bool(user_data_record.get("Name")),
                     },
                 )
-
-            # --- conversation history ---
             if conversation_items:
                 payload["conversation_items"] = conversation_items
                 if _INCLUDE_HISTORY_SUMMARY:
                     payload["conversation_summary"] = self._summarize_history(
                         conversation_items
                     )
-
-            # --- rules ---
             if business_rules is not None:
                 payload["business_rules"] = business_rules
-                rules = business_rules.get("rules_json")
-                if _INCLUDE_RULES_INLINE and isinstance(rules, dict):
-                    payload["rules"] = rules
+                if _INCLUDE_RULES_INLINE and isinstance(
+                    business_rules.get("rules_json"), dict
+                ):
+                    payload["rules"] = business_rules["rules_json"]
 
         return self.event
 
@@ -381,7 +362,8 @@ class AssessChanges:
 
     # ------------------------------------------------------------------
     def _load_user_data(self, normalized_phone: str) -> Optional[Dict[str, Any]]:
-        """Retrieve user data by phone number from the UserData table.
+        """
+        Retrieve user data by phone number from the UserData table.
 
         Since DynamoDB items are schemaless for non-key attributes, if the "Name"
         attribute exists for the item, it will be returned as part of the full item.
@@ -483,14 +465,29 @@ class AssessChanges:
             )
             return []
 
+        # Prefer newest-first, and project only relevant attributes.
+        expr_names = {
+            "#pk": "PK",
+            "#sk": "SK",
+            "#txt": "text",
+            "#wa": "whatsapp_id",
+            "#ts": "whatsapp_timestamp",
+            "#ca": "created_at",
+            "#fn": "from_number",
+            "#tp": "type",
+        }
+        projection = (
+            "#pk,#sk,#txt,#wa,#ts,#ca,#fn,#tp"
+        )  # add more names if you need them downstream
+
         for partition_key in partition_keys:
             try:
                 response = table.query(
                     KeyConditionExpression=Key("PK").eq(partition_key),
-                    Limit=self._CONVERSATION_QUERY_LIMIT,
+                    Limit=_HISTORY_LIMIT,
                     ScanIndexForward=False,  # newest first
-                    ProjectionExpression="#pk, SK, created_at, text, whatsapp_id, from_number, #t",
-                    ExpressionAttributeNames={"#pk": "PK", "#t": "type"},
+                    ProjectionExpression=projection,
+                    ExpressionAttributeNames=expr_names,
                 )
             except (ClientError, BotoCoreError):
                 self.logger.exception(
@@ -507,9 +504,31 @@ class AssessChanges:
 
             items = response.get("Items") if isinstance(response, dict) else None
             if isinstance(items, list) and items:
-                return items
+                # Normalize attribute-wrapped forms if present
+                normalized: List[Dict[str, Any]] = []
+                for it in items:
+                    if isinstance(it, dict):
+                        normalized.append({k: _unwrap_attribute(v) for k, v in it.items()})
+                return normalized
 
         return []
+
+    # ------------------------------------------------------------------
+    def _summarize_history(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not items:
+            return {}
+        # Items are newest-first; compute simple summary
+        newest = items[0]
+        oldest = items[-1]
+        return {
+            "count": len(items),
+            "newest_text": newest.get("text"),
+            "newest_timestamp": newest.get("whatsapp_timestamp")
+            or newest.get("created_at"),
+            "newest_wa_id": newest.get("whatsapp_id"),
+            "oldest_timestamp": oldest.get("whatsapp_timestamp")
+            or oldest.get("created_at"),
+        }
 
     # ------------------------------------------------------------------
     def _load_business_rules(self, to_number: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -577,24 +596,3 @@ class AssessChanges:
         # If dict, leave as-is
 
         return item
-
-    # ------------------------------------------------------------------
-    def _summarize_history(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not items:
-            return {}
-        # Query is newest-first, so index 0 is the most recent
-        newest = items[0]
-        oldest = items[-1]
-
-        def _get(d: Dict[str, Any], k: str) -> Optional[str]:
-            v = d.get(k)
-            return v.strip() if isinstance(v, str) else v
-
-        return {
-            "count": len(items),
-            "newest_at": _get(newest, "created_at") or _get(newest, "SK"),
-            "newest_text": _get(newest, "text"),
-            "newest_whatsapp_id": _get(newest, "whatsapp_id"),
-            "oldest_at": _get(oldest, "created_at") or _get(oldest, "SK"),
-            "oldest_text": _get(oldest, "text"),
-        }
