@@ -475,7 +475,9 @@ class AssessChanges:
             "#fn": "from_number",
             "#tp": "type",
         }
-        projection = "#pk,#sk,#txt,#wa,#ts,#ca,#fn,#tp"  # add more names if you need them downstream
+        projection = (  # add more names if you need them downstream
+            "#pk,#sk,#txt,#wa,#ts,#ca,#fn,#tp"
+        )
 
         for partition_key in partition_keys:
             try:
@@ -522,11 +524,13 @@ class AssessChanges:
         return {
             "count": len(items),
             "newest_text": newest.get("text"),
-            "newest_timestamp": newest.get("whatsapp_timestamp")
-            or newest.get("created_at"),
+            "newest_timestamp": newest.get("whatsapp_timestamp") or newest.get(
+                "created_at"
+            ),
             "newest_wa_id": newest.get("whatsapp_id"),
-            "oldest_timestamp": oldest.get("whatsapp_timestamp")
-            or oldest.get("created_at"),
+            "oldest_timestamp": oldest.get("whatsapp_timestamp") or oldest.get(
+                "created_at"
+            ),
         }
 
     # ------------------------------------------------------------------
