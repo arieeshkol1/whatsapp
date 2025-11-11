@@ -117,11 +117,12 @@ class AssessChanges:
                 name_value = user_data_record.get("Name")
                 if isinstance(name_value, str) and name_value.strip():
                     payload["user_name"] = name_value
+                # Avoid reserved LogRecord keys (e.g., "name")
                 self.logger.debug(
                     "AssessChanges user_data loaded",
                     extra={
-                        "phone": normalized_phone,
-                        "name": user_data_record.get("Name"),
+                        "ctx_phone": normalized_phone,
+                        "ctx_user_name": user_data_record.get("Name"),
                     },
                 )
             if conversation_items:
