@@ -29,27 +29,16 @@ from botocore.exceptions import BotoCoreError, ClientError
 from common.logger import custom_logger
 
 logger = custom_logger()
-_DESERIALIZER = TypeDeserializer()
-_ATTRIBUTE_KEYS = {
-    "S",
-    "N",
-    "B",
-    "BOOL",
-    "NULL",
-    "M",
-    "L",
-    "SS",
-    "NS",
-    "BS",
-}
+_DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
 
 
-def _looks_like_attribute_map(value: Any) -> bool:
-    return bool(
-        isinstance(value, dict)
-        and len(value) == 1
-        and next(iter(value)) in _ATTRIBUTE_KEYS
-    )
+def _unwrap_attribute(value: Any) -> Any:
+    """Return the underlying value for simple DynamoDB attribute maps."""
+    if isinstance(value, dict):
+        for key in _DYNAMODB_SCALAR_KEYS:
+            if key in value:
+                return value[key]
+    return value
 
 
 def _is_enabled(flag: Optional[str]) -> bool:
@@ -263,17 +252,7 @@ class AssessChanges:
         # document-deserialised form. Detect that scenario and convert it to a
         # standard Python dictionary so downstream callers don't have to deal
         # with AttributeValue wrappers (e.g., {"S": "value"}).
-        if any(_looks_like_attribute_map(value) for value in item.values()):
-            try:
-                item = {
-                    key: _DESERIALIZER.deserialize(value)  # type: ignore[arg-type]
-                    for key, value in item.items()
-                }
-            except Exception:  # pragma: no cover - defensive guard
-                self.logger.exception(
-                    "Failed to deserialize user data item", extra={"phone": normalized_phone}
-                )
-                return None
+        item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
         # Canonicalise the returned item: strip whitespace from PK if present.
         pn = item.get("PhoneNumber")
