@@ -394,17 +394,17 @@ class ChatbotAPIStack(Stack):
             "LOG_LEVEL": self.app_config["log_level"],
             "SECRET_NAME": self.app_config["secret_name"],
             "META_ENDPOINT": self.app_config["meta_endpoint"],
-            "ASSESS_CHANGES_FEATURE": self.app_config.get(
-                "ASSESS_CHANGES_FEATURE", "on"
-            ),
+            "ASSESS_CHANGES_FEATURE": "true",
             "USER_INFO_TABLE": self.app_config.get(
                 "USER_INFO_TABLE", self.users_info_table.table_name
             ),
             "USER_DATA_TABLE": self.app_config.get(
                 "USER_DATA_TABLE",
-                getattr(self, "user_data_table").table_name
-                if hasattr(self, "user_data_table")
-                else USER_DATA_TABLE_DEFAULT_NAME,
+                (
+                    getattr(self, "user_data_table").table_name
+                    if hasattr(self, "user_data_table")
+                    else USER_DATA_TABLE_DEFAULT_NAME
+                ),
             ),
         }
 
@@ -413,12 +413,16 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
-            "USER_INFO_TABLE": self.users_info_table.table_name
-            if hasattr(self, "users_info_table")
-            else None,
-            "USER_DATA_TABLE": self.user_data_table.table_name
-            if hasattr(self, "user_data_table")
-            else None,
+            "USER_INFO_TABLE": (
+                self.users_info_table.table_name
+                if hasattr(self, "users_info_table")
+                else None
+            ),
+            "USER_DATA_TABLE": (
+                self.user_data_table.table_name
+                if hasattr(self, "user_data_table")
+                else None
+            ),
         }
 
         for key, value in optional_values.items():
