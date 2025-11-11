@@ -395,7 +395,7 @@ class ChatbotAPIStack(Stack):
             "SECRET_NAME": self.app_config["secret_name"],
             "META_ENDPOINT": self.app_config["meta_endpoint"],
             "ASSESS_CHANGES_FEATURE": self.app_config.get(
-                "ASSESS_CHANGES_FEATURE", "off"
+                "ASSESS_CHANGES_FEATURE", "on"
             ),
             "USER_INFO_TABLE": self.app_config.get(
                 "USER_INFO_TABLE", self.users_info_table.table_name
