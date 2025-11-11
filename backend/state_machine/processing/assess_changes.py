@@ -35,6 +35,7 @@ from common.logger import custom_logger
 
 logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
+_HISTORY_LIMIT = 50
 
 
 def _unwrap_attribute(value: Any) -> Any:
@@ -143,7 +144,7 @@ def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
-    _CONVERSATION_QUERY_LIMIT = 50
+    _CONVERSATION_QUERY_LIMIT = _HISTORY_LIMIT
 
     def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
         self.event = event if isinstance(event, dict) else {}
@@ -156,6 +157,7 @@ class AssessChanges:
         self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
             "RULES_TABLE"
         )
+        self._rules_version = os.environ.get("RULESET_VERSION", "CURRENT")
 
         self._dynamodb_resource = None
 
@@ -488,6 +490,19 @@ class AssessChanges:
 
             items = response.get("Items") if isinstance(response, dict) else None
             if isinstance(items, list) and items:
+                # Some environments return raw AttributeValue maps. Normalize them so
+                # downstream code always receives simple Python dictionaries.
+                normalized: List[Dict[str, Any]] = []
+                for item in items:
+                    if isinstance(item, dict):
+                        normalized.append(
+                            {
+                                key: _unwrap_attribute(value)
+                                for key, value in item.items()
+                            }
+                        )
+                if normalized:
+                    return normalized
                 return items
 
         return []
@@ -519,7 +534,9 @@ class AssessChanges:
         item: Optional[Dict[str, Any]] = None
         for candidate in key_variants:
             try:
-                response = table.get_item(Key={"PK": candidate, "SK": "CURRENT"})
+                response = table.get_item(
+                    Key={"PK": candidate, "SK": self._rules_version}
+                )
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to load business rules",
