@@ -16,8 +16,10 @@ Change log:
 - Make DynamoDB resource region-safe for tests/CI (default: us-east-1).
 - Tolerate bad stored PKs (e.g., trailing newline / missing '+') when reading.
 - Canonicalize returned item to strip whitespace from PhoneNumber and Name.
-- Expose RULESET_VERSION and MIN_INTL_DIGITS via env.
+- Expose RULESET_VERSION, MIN_INTL_DIGITS, and history controls via env.
 - Clearer flag evaluation + logging for easier ops.
+- New: inline rules mirror under assess_changes["rules"].
+- New: newest-first conversation query with summary.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 
 from common.logger import custom_logger
@@ -39,6 +41,13 @@ _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
 _MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
 _ENABLE_TOLERANT_SCAN = os.environ.get(
     "ASSESS_TOLERANT_SCAN", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+_HISTORY_LIMIT = int(os.environ.get("ASSESS_HISTORY_LIMIT", "50"))
+_INCLUDE_HISTORY_SUMMARY = os.environ.get(
+    "ASSESS_INCLUDE_HISTORY_SUMMARY", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+_INCLUDE_RULES_INLINE = os.environ.get(
+    "ASSESS_INCLUDE_RULES_INLINE", "true"
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -148,8 +157,6 @@ def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
-    _CONVERSATION_QUERY_LIMIT = 200
-
     def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
         self.event = event if isinstance(event, dict) else {}
         self.logger = logger
@@ -241,8 +248,16 @@ class AssessChanges:
                 )
             if conversation_items:
                 payload["conversation_items"] = conversation_items
+                if _INCLUDE_HISTORY_SUMMARY:
+                    payload["conversation_summary"] = self._summarize_history(
+                        conversation_items
+                    )
             if business_rules is not None:
                 payload["business_rules"] = business_rules
+                if _INCLUDE_RULES_INLINE and isinstance(
+                    business_rules.get("rules_json"), dict
+                ):
+                    payload["rules"] = business_rules["rules_json"]
 
         return self.event
 
@@ -449,12 +464,27 @@ class AssessChanges:
             )
             return []
 
+        # Prefer newest-first, and project only relevant attributes.
+        expr_names = {
+            "#pk": "PK",
+            "#sk": "SK",
+            "#txt": "text",
+            "#wa": "whatsapp_id",
+            "#ts": "whatsapp_timestamp",
+            "#ca": "created_at",
+            "#fn": "from_number",
+            "#tp": "type",
+        }
+        projection = "#pk,#sk,#txt,#wa,#ts,#ca,#fn,#tp"  # add more names if you need them downstream
+
         for partition_key in partition_keys:
             try:
                 response = table.query(
                     KeyConditionExpression=Key("PK").eq(partition_key),
-                    Limit=self._CONVERSATION_QUERY_LIMIT,
-                    # NOTE: Add ProjectionExpression here if you want fewer attrs
+                    Limit=_HISTORY_LIMIT,
+                    ScanIndexForward=False,  # newest first
+                    ProjectionExpression=projection,
+                    ExpressionAttributeNames=expr_names,
                 )
             except (ClientError, BotoCoreError):
                 self.logger.exception(
@@ -471,9 +501,33 @@ class AssessChanges:
 
             items = response.get("Items") if isinstance(response, dict) else None
             if isinstance(items, list) and items:
-                return items
+                # Normalize attribute-wrapped forms if present
+                normalized: List[Dict[str, Any]] = []
+                for it in items:
+                    if isinstance(it, dict):
+                        normalized.append(
+                            {k: _unwrap_attribute(v) for k, v in it.items()}
+                        )
+                return normalized
 
         return []
+
+    # ------------------------------------------------------------------
+    def _summarize_history(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not items:
+            return {}
+        # Items are newest-first; compute simple summary
+        newest = items[0]
+        oldest = items[-1]
+        return {
+            "count": len(items),
+            "newest_text": newest.get("text"),
+            "newest_timestamp": newest.get("whatsapp_timestamp")
+            or newest.get("created_at"),
+            "newest_wa_id": newest.get("whatsapp_id"),
+            "oldest_timestamp": oldest.get("whatsapp_timestamp")
+            or oldest.get("created_at"),
+        }
 
     # ------------------------------------------------------------------
     def _load_business_rules(
