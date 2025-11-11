@@ -110,7 +110,10 @@ class AssessChanges:
         conversation_items = self._load_conversation_items(normalized_phone)
 
         if user_data_record is not None or conversation_items:
-            payload = self.event.setdefault("assess_changes", {})
+            payload = self.event.get("assess_changes")
+            if not isinstance(payload, dict):
+                payload = {}
+                self.event["assess_changes"] = payload
             if user_data_record is not None:
                 payload["user_data"] = user_data_record
                 # Provide a flat "user_name" for convenience in downstream steps.
