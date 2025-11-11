@@ -5,7 +5,8 @@ retrieves additional context for the current phone number from multiple sources:
 
 * The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
 * The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
-* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars).
+* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars; version via
+  "RULESET_VERSION", default: "CURRENT").
 
 The resulting payload is appended to the event so the downstream
 "ProcessText" step can use it without re-querying DynamoDB.
@@ -14,7 +15,9 @@ Change log:
 - Include the new "Name" attribute from "UserData" when present.
 - Make DynamoDB resource region-safe for tests/CI (default: us-east-1).
 - Tolerate bad stored PKs (e.g., trailing newline / missing '+') when reading.
-- Canonicalize returned item to strip whitespace from PhoneNumber.
+- Canonicalize returned item to strip whitespace from PhoneNumber and Name.
+- Expose RULESET_VERSION and MIN_INTL_DIGITS via env.
+- Clearer flag evaluation + logging for easier ops.
 """
 
 from __future__ import annotations
@@ -24,14 +27,20 @@ import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key
-from boto3.dynamodb.types import TypeDeserializer
+from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import BotoCoreError, ClientError
 
 from common.logger import custom_logger
 
 logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
+
+# --- Configurable knobs via env ---
+_MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
+_ENABLE_TOLERANT_SCAN = (
+    os.environ.get("ASSESS_TOLERANT_SCAN", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 
 def _unwrap_attribute(value: Any) -> Any:
@@ -52,7 +61,12 @@ def _is_enabled(flag: Optional[str]) -> bool:
 
 
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
-    """Normalise a phone number to E.164 (adds '+' prefix when missing)."""
+    """Normalize a phone number to E.164 conservatively.
+
+    - If already starts with '+', return as-is (stripped).
+    - If digits >= _MIN_INTL_DIGITS, assume it's an international number and prefix '+'.
+    - Otherwise return the trimmed input to avoid making a bad E.164.
+    """
     if not number:
         return None
     trimmed = str(number).strip()
@@ -60,8 +74,9 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
         return None
     if trimmed.startswith("+"):
         return trimmed
-    if trimmed[0].isdigit():
-        return f"+{trimmed}"
+    digits = "".join(ch for ch in trimmed if ch.isdigit())
+    if len(digits) >= _MIN_INTL_DIGITS:
+        return f"+{digits}"
     return trimmed
 
 
@@ -72,6 +87,8 @@ def _key_variants(e164: str) -> List[str]:
     """
     variants: List[str] = []
     base = e164.strip()
+    if not base:
+        return variants
     variants.append(base)
     # Common bad write: trailing newline
     variants.append(base + "\n")
@@ -139,12 +156,13 @@ class AssessChanges:
         self.logger = logger
         self._endpoint_url = os.environ.get("ENDPOINT_URL")
         self._user_data_table_name = os.environ.get("USER_DATA_TABLE")
-        self._conversation_table_name = os.environ.get(
-            "DYNAMODB_TABLE"
-        ) or os.environ.get("TABLE_NAME")
+        self._conversation_table_name = os.environ.get("DYNAMODB_TABLE") or os.environ.get(
+            "TABLE_NAME"
+        )
         self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
             "RULES_TABLE"
         )
+        self._rules_version = os.environ.get("RULESET_VERSION", "CURRENT")
 
         self._dynamodb_resource = None
 
@@ -160,7 +178,17 @@ class AssessChanges:
             feature_flag = os.environ.get("ASSESS_CHANGES_FEATURE", "off")
 
         if not _is_enabled(feature_flag):
-            self.logger.debug("AssessChanges disabled; returning event unchanged")
+            self.logger.debug(
+                "AssessChanges disabled",
+                extra={
+                    "event_flag": (
+                        self.event.get("features", {}).get("assess_changes")
+                        if isinstance(self.event, dict)
+                        else None
+                    ),
+                    "env_flag": os.environ.get("ASSESS_CHANGES_FEATURE"),
+                },
+            )
             return self.event
 
         phone_number = self._extract_phone_number(self.event)
@@ -183,17 +211,28 @@ class AssessChanges:
                 payload = {}
                 self.event["assess_changes"] = payload
             if user_data_record is not None:
-                payload["user_data"] = user_data_record
-                # Provide a flat "user_name" for convenience in downstream steps.
+                # Canonicalize and copy selected fields
+                pn = user_data_record.get("PhoneNumber")
+                if isinstance(pn, str):
+                    user_data_record["PhoneNumber"] = pn.strip()
                 name_value = user_data_record.get("Name")
-                if isinstance(name_value, str) and name_value.strip():
-                    payload["user_name"] = name_value
+                if isinstance(name_value, str):
+                    name_value = name_value.strip()
+                    if name_value:
+                        user_data_record["Name"] = name_value
+                else:
+                    user_data_record.pop("Name", None)
+
+                payload["user_data"] = user_data_record
+                if isinstance(user_data_record.get("Name"), str) and user_data_record["Name"]:
+                    payload["user_name"] = user_data_record["Name"]
+
                 # Avoid reserved LogRecord keys (e.g., "name")
                 self.logger.debug(
                     "AssessChanges user_data loaded",
                     extra={
-                        "ctx_phone": normalized_phone,
-                        "ctx_user_name": user_data_record.get("Name"),
+                        "ctx_phone_last4": (normalized_phone[-4:] if normalized_phone else None),
+                        "has_name": bool(user_data_record.get("Name")),
                     },
                 )
             if conversation_items:
@@ -275,7 +314,7 @@ class AssessChanges:
         return None
 
     # ------------------------------------------------------------------
-    def _get_dynamodb_resource(self):
+    def _get_dynamodb_resource(self):  # -> Optional[boto3.resources.base.ServiceResource]
         if self._dynamodb_resource is None:
             try:
                 # Prefer Lambda/real env; fall back to a default for local tests/moto.
@@ -317,48 +356,69 @@ class AssessChanges:
 
         try:
             table = dynamodb.Table(self._user_data_table_name)
-            # Try a few variants to tolerate bad stored keys (e.g., trailing newline).
-            response = None
-            item = None
-            for candidate in _key_variants(normalized_phone):
-                try:
-                    response = table.get_item(Key={"PhoneNumber": candidate})
-                    item = response.get("Item") if isinstance(response, dict) else None
-                    if isinstance(item, dict):
-                        break
-                except (ClientError, BotoCoreError):
-                    # Will be caught by outer except
-                    raise
-        except (ClientError, BotoCoreError):
-            self.logger.exception(
-                "Failed to read user data",
-                extra={"phone": normalized_phone},
-            )
-            return None
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error loading user data",
-                extra={"phone": normalized_phone},
+                "Unexpected error preparing user data table",
+                extra={"table": self._user_data_table_name},
             )
             return None
+
+        response = None
+        item: Optional[Dict[str, Any]] = None
+        for candidate in _key_variants(normalized_phone):
+            try:
+                response = table.get_item(Key={"PhoneNumber": candidate})
+                item = response.get("Item") if isinstance(response, dict) else None
+                if isinstance(item, dict):
+                    break
+            except (ClientError, BotoCoreError):
+                self.logger.exception(
+                    "UserData get_item failed", extra={"candidate": candidate}
+                )
+                continue
+            except Exception:  # pragma: no cover
+                self.logger.exception(
+                    "Unexpected error reading user data", extra={"candidate": candidate}
+                )
+                continue
+
+        # Optional tolerant scan to recover truly dirty keys (guarded)
+        if item is None and _ENABLE_TOLERANT_SCAN:
+            tail = "".join(ch for ch in normalized_phone if ch.isdigit())[-8:]
+            scan_kwargs: Dict[str, Any] = {}
+            if tail:
+                scan_kwargs["FilterExpression"] = Attr("PhoneNumber").contains(tail)
+            try:
+                resp = table.scan(**scan_kwargs) if scan_kwargs else table.scan()
+                for it in resp.get("Items", []) or []:
+                    stored = _unwrap_attribute(it.get("PhoneNumber"))
+                    if _normalize_phone(stored) == normalized_phone:
+                        item = it
+                        break
+            except (ClientError, BotoCoreError):
+                self.logger.exception("UserData tolerant scan failed")
+            except Exception:  # pragma: no cover
+                self.logger.exception("Unexpected error in tolerant scan")
 
         if not isinstance(item, dict):
             return None
 
         # Some environments store the raw DynamoDB attribute map instead of the
-        # document-deserialised form. Detect that scenario and convert it to a
-        # standard Python dictionary so downstream callers don't have to deal
-        # with AttributeValue wrappers (e.g., {"S": "value"}).
+        # document-deserialized form. Convert to plain dict of scalars.
         item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
-        # Canonicalise the returned item: strip whitespace from PK if present.
+        # Canonicalize common fields
         pn = item.get("PhoneNumber")
         if isinstance(pn, str):
             item["PhoneNumber"] = pn.strip()
         name_val = item.get("Name")
-        if isinstance(name_val, str) and not name_val.strip():
-            # Normalise empty strings to missing to avoid confusing downstream checks.
-            item.pop("Name", None)
+        if isinstance(name_val, str):
+            name_val = name_val.strip()
+            if name_val:
+                item["Name"] = name_val
+            else:
+                item.pop("Name", None)
+
         return item
 
     # ------------------------------------------------------------------
@@ -388,23 +448,18 @@ class AssessChanges:
                 response = table.query(
                     KeyConditionExpression=Key("PK").eq(partition_key),
                     Limit=self._CONVERSATION_QUERY_LIMIT,
+                    # NOTE: Add ProjectionExpression here if you want fewer attrs
                 )
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to query conversation items",
-                    extra={
-                        "table": self._conversation_table_name,
-                        "pk": partition_key,
-                    },
+                    extra={"table": self._conversation_table_name, "pk": partition_key},
                 )
                 continue
             except Exception:  # pragma: no cover
                 self.logger.exception(
                     "Unexpected error querying conversation items",
-                    extra={
-                        "table": self._conversation_table_name,
-                        "pk": partition_key,
-                    },
+                    extra={"table": self._conversation_table_name, "pk": partition_key},
                 )
                 continue
 
@@ -439,7 +494,7 @@ class AssessChanges:
         item: Optional[Dict[str, Any]] = None
         for candidate in key_variants:
             try:
-                response = table.get_item(Key={"PK": candidate, "SK": "CURRENT"})
+                response = table.get_item(Key={"PK": candidate, "SK": self._rules_version})
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to load business rules",
@@ -464,6 +519,11 @@ class AssessChanges:
         item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
         rules_blob = item.get("rules_json")
+        if isinstance(rules_blob, bytes):
+            try:
+                rules_blob = rules_blob.decode("utf-8", errors="replace")
+            except Exception:  # pragma: no cover
+                rules_blob = None
         if isinstance(rules_blob, str):
             try:
                 item["rules_json"] = json.loads(rules_blob)
@@ -472,5 +532,6 @@ class AssessChanges:
                     "Failed to decode rules_json for business rules",
                     extra={"pk": item.get("PK")},
                 )
+        # If dict, leave as-is
 
         return item
