@@ -28,6 +28,16 @@ from botocore.exceptions import BotoCoreError, ClientError
 from common.logger import custom_logger
 
 logger = custom_logger()
+_DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
+
+
+def _unwrap_attribute(value: Any) -> Any:
+    """Return the underlying value for simple DynamoDB attribute maps."""
+    if isinstance(value, dict):
+        for key in _DYNAMODB_SCALAR_KEYS:
+            if key in value:
+                return value[key]
+    return value
 
 
 def _is_enabled(flag: Optional[str]) -> bool:
@@ -110,7 +120,10 @@ class AssessChanges:
         conversation_items = self._load_conversation_items(normalized_phone)
 
         if user_data_record is not None or conversation_items:
-            payload = self.event.setdefault("assess_changes", {})
+            payload = self.event.get("assess_changes")
+            if not isinstance(payload, dict):
+                payload = {}
+                self.event["assess_changes"] = payload
             if user_data_record is not None:
                 payload["user_data"] = user_data_record
                 # Provide a flat "user_name" for convenience in downstream steps.
@@ -233,6 +246,12 @@ class AssessChanges:
 
         if not isinstance(item, dict):
             return None
+
+        # Some environments store the raw DynamoDB attribute map instead of the
+        # document-deserialised form. Detect that scenario and convert it to a
+        # standard Python dictionary so downstream callers don't have to deal
+        # with AttributeValue wrappers (e.g., {"S": "value"}).
+        item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
         # Canonicalise the returned item: strip whitespace from PK if present.
         pn = item.get("PhoneNumber")
