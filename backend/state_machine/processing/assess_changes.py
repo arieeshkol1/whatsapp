@@ -23,11 +23,33 @@ from typing import Any, Dict, List, Optional
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import BotoCoreError, ClientError
 
 from common.logger import custom_logger
 
 logger = custom_logger()
+_DESERIALIZER = TypeDeserializer()
+_ATTRIBUTE_KEYS = {
+    "S",
+    "N",
+    "B",
+    "BOOL",
+    "NULL",
+    "M",
+    "L",
+    "SS",
+    "NS",
+    "BS",
+}
+
+
+def _looks_like_attribute_map(value: Any) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and len(value) == 1
+        and next(iter(value)) in _ATTRIBUTE_KEYS
+    )
 
 
 def _is_enabled(flag: Optional[str]) -> bool:
@@ -110,7 +132,10 @@ class AssessChanges:
         conversation_items = self._load_conversation_items(normalized_phone)
 
         if user_data_record is not None or conversation_items:
-            payload = self.event.setdefault("assess_changes", {})
+            payload = self.event.get("assess_changes")
+            if not isinstance(payload, dict):
+                payload = {}
+                self.event["assess_changes"] = payload
             if user_data_record is not None:
                 payload["user_data"] = user_data_record
                 # Provide a flat "user_name" for convenience in downstream steps.
@@ -233,6 +258,22 @@ class AssessChanges:
 
         if not isinstance(item, dict):
             return None
+
+        # Some environments store the raw DynamoDB attribute map instead of the
+        # document-deserialised form. Detect that scenario and convert it to a
+        # standard Python dictionary so downstream callers don't have to deal
+        # with AttributeValue wrappers (e.g., {"S": "value"}).
+        if any(_looks_like_attribute_map(value) for value in item.values()):
+            try:
+                item = {
+                    key: _DESERIALIZER.deserialize(value)  # type: ignore[arg-type]
+                    for key, value in item.items()
+                }
+            except Exception:  # pragma: no cover - defensive guard
+                self.logger.exception(
+                    "Failed to deserialize user data item", extra={"phone": normalized_phone}
+                )
+                return None
 
         # Canonicalise the returned item: strip whitespace from PK if present.
         pn = item.get("PhoneNumber")
