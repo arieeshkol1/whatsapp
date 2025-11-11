@@ -80,10 +80,29 @@ def _key_variants(e164: str) -> List[str]:
     return variants
 
 
+def _conversation_key_variants(e164: str) -> List[str]:
+    """Return candidate partition keys for the conversation history table."""
+    variants: List[str] = []
+    base = e164.strip()
+    if not base:
+        return variants
+
+    def _append_variant(phone: str) -> None:
+        key = f"NUMBER#{phone}"
+        if key not in variants:
+            variants.append(key)
+
+    _append_variant(base)
+    if base.startswith("+"):
+        _append_variant(base[1:])
+
+    return variants
+
+
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
-    _CONVERSATION_QUERY_LIMIT = 25
+    _CONVERSATION_QUERY_LIMIT = 200
 
     def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
         self.event = event if isinstance(event, dict) else {}
@@ -273,29 +292,46 @@ class AssessChanges:
         if dynamodb is None:
             return []
 
-        partition_key = f"NUMBER#{normalized_phone}"
+        partition_keys = _conversation_key_variants(normalized_phone)
+        if not partition_keys:
+            return []
 
         try:
             table = dynamodb.Table(self._conversation_table_name)
-            response = table.query(
-                KeyConditionExpression=Key("PK").eq(partition_key),
-                Limit=self._CONVERSATION_QUERY_LIMIT,
-            )
-        except (ClientError, BotoCoreError):
-            self.logger.exception(
-                "Failed to query conversation items",
-                extra={"table": self._conversation_table_name, "pk": partition_key},
-            )
-            return []
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error querying conversation items",
-                extra={"table": self._conversation_table_name, "pk": partition_key},
+                "Unexpected error preparing conversation query",
+                extra={"table": self._conversation_table_name},
             )
             return []
 
-        items = response.get("Items") if isinstance(response, dict) else None
-        if not isinstance(items, list):
-            return []
+        for partition_key in partition_keys:
+            try:
+                response = table.query(
+                    KeyConditionExpression=Key("PK").eq(partition_key),
+                    Limit=self._CONVERSATION_QUERY_LIMIT,
+                )
+            except (ClientError, BotoCoreError):
+                self.logger.exception(
+                    "Failed to query conversation items",
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
+                )
+                continue
+            except Exception:  # pragma: no cover
+                self.logger.exception(
+                    "Unexpected error querying conversation items",
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
+                )
+                continue
 
-        return items
+            items = response.get("Items") if isinstance(response, dict) else None
+            if isinstance(items, list) and items:
+                return items
+
+        return []
