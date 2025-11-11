@@ -1,16 +1,16 @@
-"""AssessChanges step – enrich events with persisted user context.
+"""AssessChanges step - enrich events with persisted user context.
 
-This step is feature-gated (``ASSESS_CHANGES_FEATURE``) and, when enabled,
+This step is feature-gated ("ASSESS_CHANGES_FEATURE") and, when enabled,
 retrieves additional context for the current phone number from two sources:
 
-* The ``UserData`` table (name provided by the ``USER_DATA_TABLE`` env var).
-* The main WhatsApp conversation table (``DYNAMODB_TABLE`` env var).
+* The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
+* The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
 
 The resulting payload is appended to the event so the downstream
-``ProcessText`` step can use it without re-querying DynamoDB.
+"ProcessText" step can use it without re-querying DynamoDB.
 
 Change log:
-- Explicitly include the new ``Name`` attribute from ``UserData`` when present.
+- Include the new "Name" attribute from "UserData" when present.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ logger = custom_logger()
 
 
 def _is_enabled(flag: Optional[str]) -> bool:
-    """Return ``True`` when the supplied flag represents an enabled state."""
+    """Return True when the supplied flag represents an enabled state."""
     if flag is None:
         return False
     normalized = str(flag).strip().lower()
@@ -36,7 +36,7 @@ def _is_enabled(flag: Optional[str]) -> bool:
 
 
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
-    """Normalise a phone number to E.164 (adds ``+`` prefix when missing)."""
+    """Normalise a phone number to E.164 (adds '+' prefix when missing)."""
     if not number:
         return None
     trimmed = str(number).strip()
@@ -68,7 +68,6 @@ class AssessChanges:
     # ------------------------------------------------------------------
     def assess_and_apply(self) -> Dict[str, Any]:
         """Fetch user context and append it to the event when the feature is on."""
-
         feature_flag = None
         if isinstance(self.event, dict):
             features = self.event.get("features")
@@ -94,9 +93,10 @@ class AssessChanges:
             payload = self.event.setdefault("assess_changes", {})
             if user_data_record is not None:
                 payload["user_data"] = user_data_record
-                # Surface the user's name explicitly for easy access by downstream steps.
-                if "Name" in user_data_record and user_data_record["Name"]:
-                    payload["user_name"] = user_data_record["Name"]
+                # Provide a flat "user_name" for convenience in downstream steps.
+                name_value = user_data_record.get("Name")
+                if isinstance(name_value, str) and name_value.strip():
+                    payload["user_name"] = name_value
                 self.logger.debug(
                     "AssessChanges user_data loaded for %s (Name=%s)",
                     normalized_phone,
@@ -110,7 +110,6 @@ class AssessChanges:
     # ------------------------------------------------------------------
     def _extract_phone_number(self, event: Dict[str, Any]) -> Optional[str]:
         """Attempt to locate a phone number across different event shapes."""
-
         if not isinstance(event, dict):
             return None
 
@@ -153,7 +152,7 @@ class AssessChanges:
                     )
                 else:
                     self._dynamodb_resource = boto3.resource("dynamodb")
-            except Exception:  # pragma: no cover - defensive guard
+            except Exception:  # pragma: no cover
                 self.logger.exception(
                     "Failed to initialise DynamoDB resource for AssessChanges"
                 )
@@ -163,12 +162,10 @@ class AssessChanges:
     # ------------------------------------------------------------------
     def _load_user_data(self, normalized_phone: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieve user data by phone number and explicitly include the Name field
-        if it exists in the record.
+        Retrieve user data by phone number from the UserData table.
 
-        Notes:
-        - Since UserData is keyed by PhoneNumber, a GetItem fetch returns the full item.
-        - We add a ProjectionExpression to ensure Name is included when present.
+        Since DynamoDB items are schemaless for non-key attributes, if the "Name"
+        attribute exists for the item, it will be returned as part of the full item.
         """
         if not self._user_data_table_name:
             return None
@@ -179,37 +176,20 @@ class AssessChanges:
 
         try:
             table = dynamodb.Table(self._user_data_table_name)
-
-            # Explicitly project PhoneNumber and Name.
-            # (If Name isn't set on the item, it simply won't appear.)
-            response = table.get_item(
-                Key={"PhoneNumber": normalized_phone},
-                ProjectionExpression="#pn, #nm",
-                ExpressionAttributeNames={
-                    "#pn": "PhoneNumber",
-                    "#nm": "Name",
-                },
-            )
+            response = table.get_item(Key={"PhoneNumber": normalized_phone})
         except (ClientError, BotoCoreError):
             self.logger.exception(
                 "Failed to read user data", extra={"phone": normalized_phone}
             )
             return None
-        except Exception:  # pragma: no cover - unexpected runtime error
+        except Exception:  # pragma: no cover
             self.logger.exception(
                 "Unexpected error loading user data", extra={"phone": normalized_phone}
             )
             return None
 
         item = response.get("Item") if isinstance(response, dict) else None
-        if not isinstance(item, dict):
-            return None
-
-        # Ensure we always return a predictable structure (PhoneNumber + Name when present).
-        return {
-            "PhoneNumber": item.get("PhoneNumber"),
-            "Name": item.get("Name"),
-        }
+        return item if isinstance(item, dict) else None
 
     # ------------------------------------------------------------------
     def _load_conversation_items(self, normalized_phone: str) -> List[Dict[str, Any]]:
@@ -234,7 +214,7 @@ class AssessChanges:
                 extra={"table": self._conversation_table_name, "pk": partition_key},
             )
             return []
-        except Exception:  # pragma: no cover - unexpected runtime error
+        except Exception:  # pragma: no cover
             self.logger.exception(
                 "Unexpected error querying conversation items",
                 extra={"table": self._conversation_table_name, "pk": partition_key},
