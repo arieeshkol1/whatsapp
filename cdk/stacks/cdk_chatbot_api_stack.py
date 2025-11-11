@@ -13,26 +13,38 @@ USER_DATA_TABLE_DEFAULT_NAME = "UserData"
 
 # External imports
 from aws_cdk import (
+    CfnOutput,
     Duration,
+    RemovalPolicy,
+    Stack,
+    Tags,
     aws_bedrock,
     aws_dynamodb,
     aws_iam,
     aws_lambda,
     aws_lambda_event_sources,
     aws_logs,
-    aws_opensearchserverless as oss,
-    aws_ssm,
-    aws_secretsmanager,
     aws_s3,
-    aws_s3_deployment as s3d,
-    aws_stepfunctions as aws_sfn,
-    aws_stepfunctions_tasks as aws_sfn_tasks,
+    aws_secretsmanager,
+    aws_ssm,
+)
+from aws_cdk import (
     aws_apigateway as aws_apigw,
+)
+from aws_cdk import (
+    aws_opensearchserverless as oss,
+)
+from aws_cdk import (
+    aws_s3_deployment as s3d,
+)
+from aws_cdk import (
+    aws_stepfunctions as aws_sfn,
+)
+from aws_cdk import (
+    aws_stepfunctions_tasks as aws_sfn_tasks,
+)
+from aws_cdk import (
     custom_resources as cr,
-    CfnOutput,
-    RemovalPolicy,
-    Stack,
-    Tags,
 )
 from constructs import Construct
 
@@ -391,9 +403,11 @@ class ChatbotAPIStack(Stack):
             ),
             "USER_DATA_TABLE": self.app_config.get(
                 "USER_DATA_TABLE",
-                getattr(self, "user_data_table").table_name
-                if hasattr(self, "user_data_table")
-                else USER_DATA_TABLE_DEFAULT_NAME,
+                (
+                    getattr(self, "user_data_table").table_name
+                    if hasattr(self, "user_data_table")
+                    else USER_DATA_TABLE_DEFAULT_NAME
+                ),
             ),
         }
 
@@ -402,12 +416,16 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
-            "USER_INFO_TABLE": self.users_info_table.table_name
-            if hasattr(self, "users_info_table")
-            else None,
-            "USER_DATA_TABLE": self.user_data_table.table_name
-            if hasattr(self, "user_data_table")
-            else None,
+            "USER_INFO_TABLE": (
+                self.users_info_table.table_name
+                if hasattr(self, "users_info_table")
+                else None
+            ),
+            "USER_DATA_TABLE": (
+                self.user_data_table.table_name
+                if hasattr(self, "user_data_table")
+                else None
+            ),
         }
 
         for key, value in optional_values.items():
