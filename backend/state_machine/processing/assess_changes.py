@@ -37,10 +37,9 @@ _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
 
 # --- Configurable knobs via env ---
 _MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
-_ENABLE_TOLERANT_SCAN = (
-    os.environ.get("ASSESS_TOLERANT_SCAN", "false").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
+_ENABLE_TOLERANT_SCAN = os.environ.get(
+    "ASSESS_TOLERANT_SCAN", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _unwrap_attribute(value: Any) -> Any:
@@ -156,9 +155,9 @@ class AssessChanges:
         self.logger = logger
         self._endpoint_url = os.environ.get("ENDPOINT_URL")
         self._user_data_table_name = os.environ.get("USER_DATA_TABLE")
-        self._conversation_table_name = os.environ.get("DYNAMODB_TABLE") or os.environ.get(
-            "TABLE_NAME"
-        )
+        self._conversation_table_name = os.environ.get(
+            "DYNAMODB_TABLE"
+        ) or os.environ.get("TABLE_NAME")
         self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
             "RULES_TABLE"
         )
@@ -224,14 +223,19 @@ class AssessChanges:
                     user_data_record.pop("Name", None)
 
                 payload["user_data"] = user_data_record
-                if isinstance(user_data_record.get("Name"), str) and user_data_record["Name"]:
+                if (
+                    isinstance(user_data_record.get("Name"), str)
+                    and user_data_record["Name"]
+                ):
                     payload["user_name"] = user_data_record["Name"]
 
                 # Avoid reserved LogRecord keys (e.g., "name")
                 self.logger.debug(
                     "AssessChanges user_data loaded",
                     extra={
-                        "ctx_phone_last4": (normalized_phone[-4:] if normalized_phone else None),
+                        "ctx_phone_last4": (
+                            normalized_phone[-4:] if normalized_phone else None
+                        ),
                         "has_name": bool(user_data_record.get("Name")),
                     },
                 )
@@ -314,7 +318,9 @@ class AssessChanges:
         return None
 
     # ------------------------------------------------------------------
-    def _get_dynamodb_resource(self):  # -> Optional[boto3.resources.base.ServiceResource]
+    def _get_dynamodb_resource(
+        self,
+    ):  # -> Optional[boto3.resources.base.ServiceResource]
         if self._dynamodb_resource is None:
             try:
                 # Prefer Lambda/real env; fall back to a default for local tests/moto.
@@ -470,7 +476,9 @@ class AssessChanges:
         return []
 
     # ------------------------------------------------------------------
-    def _load_business_rules(self, to_number: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _load_business_rules(
+        self, to_number: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
         if not self._rules_table_name or not to_number:
             return None
 
@@ -494,7 +502,9 @@ class AssessChanges:
         item: Optional[Dict[str, Any]] = None
         for candidate in key_variants:
             try:
-                response = table.get_item(Key={"PK": candidate, "SK": self._rules_version})
+                response = table.get_item(
+                    Key={"PK": candidate, "SK": self._rules_version}
+                )
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to load business rules",
