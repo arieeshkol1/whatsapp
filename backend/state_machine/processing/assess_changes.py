@@ -8,6 +8,9 @@ retrieves additional context for the current phone number from two sources:
 
 The resulting payload is appended to the event so the downstream
 ``ProcessText`` step can use it without re-querying DynamoDB.
+
+Change log:
+- Explicitly include the new ``Name`` attribute from ``UserData`` when present.
 """
 
 from __future__ import annotations
@@ -26,24 +29,19 @@ logger = custom_logger()
 
 def _is_enabled(flag: Optional[str]) -> bool:
     """Return ``True`` when the supplied flag represents an enabled state."""
-
     if flag is None:
         return False
-
     normalized = str(flag).strip().lower()
     return normalized in {"1", "true", "on", "enabled", "yes"}
 
 
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
     """Normalise a phone number to E.164 (adds ``+`` prefix when missing)."""
-
     if not number:
         return None
-
     trimmed = str(number).strip()
     if not trimmed:
         return None
-
     if trimmed.startswith("+"):
         return trimmed
     if trimmed[0].isdigit():
@@ -96,6 +94,14 @@ class AssessChanges:
             payload = self.event.setdefault("assess_changes", {})
             if user_data_record is not None:
                 payload["user_data"] = user_data_record
+                # Surface the user's name explicitly for easy access by downstream steps.
+                if "Name" in user_data_record and user_data_record["Name"]:
+                    payload["user_name"] = user_data_record["Name"]
+                self.logger.debug(
+                    "AssessChanges user_data loaded for %s (Name=%s)",
+                    normalized_phone,
+                    user_data_record.get("Name"),
+                )
             if conversation_items:
                 payload["conversation_items"] = conversation_items
 
@@ -156,6 +162,14 @@ class AssessChanges:
 
     # ------------------------------------------------------------------
     def _load_user_data(self, normalized_phone: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve user data by phone number and explicitly include the Name field
+        if it exists in the record.
+
+        Notes:
+        - Since UserData is keyed by PhoneNumber, a GetItem fetch returns the full item.
+        - We add a ProjectionExpression to ensure Name is included when present.
+        """
         if not self._user_data_table_name:
             return None
 
@@ -165,7 +179,17 @@ class AssessChanges:
 
         try:
             table = dynamodb.Table(self._user_data_table_name)
-            response = table.get_item(Key={"PhoneNumber": normalized_phone})
+
+            # Explicitly project PhoneNumber and Name.
+            # (If Name isn't set on the item, it simply won't appear.)
+            response = table.get_item(
+                Key={"PhoneNumber": normalized_phone},
+                ProjectionExpression="#pn, #nm",
+                ExpressionAttributeNames={
+                    "#pn": "PhoneNumber",
+                    "#nm": "Name",
+                },
+            )
         except (ClientError, BotoCoreError):
             self.logger.exception(
                 "Failed to read user data", extra={"phone": normalized_phone}
@@ -178,7 +202,14 @@ class AssessChanges:
             return None
 
         item = response.get("Item") if isinstance(response, dict) else None
-        return item if isinstance(item, dict) else None
+        if not isinstance(item, dict):
+            return None
+
+        # Ensure we always return a predictable structure (PhoneNumber + Name when present).
+        return {
+            "PhoneNumber": item.get("PhoneNumber"),
+            "Name": item.get("Name"),
+        }
 
     # ------------------------------------------------------------------
     def _load_conversation_items(self, normalized_phone: str) -> List[Dict[str, Any]]:
@@ -215,4 +246,3 @@ class AssessChanges:
             return []
 
         return items
-
