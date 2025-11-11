@@ -331,12 +331,14 @@ class AssessChanges:
                     raise
         except (ClientError, BotoCoreError):
             self.logger.exception(
-                "Failed to read user data", extra={"phone": normalized_phone}
+                "Failed to read user data",
+                extra={"phone": normalized_phone},
             )
             return None
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error loading user data", extra={"phone": normalized_phone}
+                "Unexpected error loading user data",
+                extra={"phone": normalized_phone},
             )
             return None
 
@@ -425,7 +427,8 @@ class AssessChanges:
             table = dynamodb.Table(self._rules_table_name)
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error preparing rules table", extra={"table": self._rules_table_name}
+                "Unexpected error preparing rules table",
+                extra={"table": self._rules_table_name},
             )
             return None
 
@@ -439,7 +442,8 @@ class AssessChanges:
                 response = table.get_item(Key={"PK": candidate, "SK": "CURRENT"})
             except (ClientError, BotoCoreError):
                 self.logger.exception(
-                    "Failed to load business rules", extra={"table": self._rules_table_name, "pk": candidate}
+                    "Failed to load business rules",
+                    extra={"table": self._rules_table_name, "pk": candidate},
                 )
                 continue
             except Exception:  # pragma: no cover
@@ -465,7 +469,8 @@ class AssessChanges:
                 item["rules_json"] = json.loads(rules_blob)
             except json.JSONDecodeError:
                 self.logger.warning(
-                    "Failed to decode rules_json for business rules", extra={"pk": item.get("PK")}
+                    "Failed to decode rules_json for business rules",
+                    extra={"pk": item.get("PK")},
                 )
 
         return item
