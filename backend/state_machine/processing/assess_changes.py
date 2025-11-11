@@ -1,10 +1,12 @@
 """AssessChanges step - enrich events with persisted user context.
 
 This step is feature-gated ("ASSESS_CHANGES_FEATURE") and, when enabled,
-retrieves additional context for the current phone number from two sources:
+retrieves additional context for the current phone number from multiple sources:
 
 * The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
 * The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
+* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars).
+* A ready-to-send Bedrock request payload for downstream smart-agent orchestration.
 
 The resulting payload is appended to the event so the downstream
 "ProcessText" step can use it without re-querying DynamoDB.
@@ -18,6 +20,7 @@ Change log:
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +31,37 @@ from botocore.exceptions import BotoCoreError, ClientError
 from common.logger import custom_logger
 
 logger = custom_logger()
+_DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
+_HISTORY_LIMIT = 50
+_DEFAULT_MODEL_ID = os.environ.get("ASSESS_LLM_MODEL_ID", "amazon.nova-lite-v1:0")
+_DEFAULT_MAX_TOKENS = 1024
+
+
+def _parse_float(value: Optional[str], fallback: float) -> float:
+    if value is None:
+        return fallback
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _parse_int(value: Optional[str], fallback: int) -> int:
+    if value is None:
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _unwrap_attribute(value: Any) -> Any:
+    """Return the underlying value for simple DynamoDB attribute maps."""
+    if isinstance(value, dict):
+        for key in _DYNAMODB_SCALAR_KEYS:
+            if key in value:
+                return value[key]
+    return value
 
 
 def _is_enabled(flag: Optional[str]) -> bool:
@@ -69,10 +103,57 @@ def _key_variants(e164: str) -> List[str]:
     return variants
 
 
+def _conversation_key_variants(e164: str) -> List[str]:
+    """Return candidate partition keys for the conversation history table."""
+    variants: List[str] = []
+    base = e164.strip()
+    if not base:
+        return variants
+
+    def _append_variant(phone: str) -> None:
+        key = f"NUMBER#{phone}"
+        if key not in variants:
+            variants.append(key)
+
+    _append_variant(base)
+    if base.startswith("+"):
+        _append_variant(base[1:])
+
+    return variants
+
+
+def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
+    """Return candidate PK values for the rules table based on the to-number."""
+    variants: List[str] = []
+    if not number:
+        return variants
+
+    raw = str(number).strip()
+    if not raw:
+        return variants
+
+    def _add(candidate: str) -> None:
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+
+    _add(raw)
+
+    normalized = _normalize_phone(raw)
+    if normalized:
+        _add(normalized)
+        if normalized.startswith("+"):
+            _add(normalized[1:])
+
+    if raw.startswith("+"):
+        _add(raw[1:])
+
+    return variants
+
+
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
-    _CONVERSATION_QUERY_LIMIT = 25
+    _CONVERSATION_QUERY_LIMIT = _HISTORY_LIMIT
 
     def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
         self.event = event if isinstance(event, dict) else {}
@@ -82,6 +163,18 @@ class AssessChanges:
         self._conversation_table_name = os.environ.get(
             "DYNAMODB_TABLE"
         ) or os.environ.get("TABLE_NAME")
+        self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
+            "RULES_TABLE"
+        )
+        self._rules_version = os.environ.get("RULESET_VERSION", "CURRENT")
+        self._llm_model_id = os.environ.get("ASSESS_LLM_MODEL_ID", _DEFAULT_MODEL_ID)
+        self._llm_max_tokens = _parse_int(
+            os.environ.get("ASSESS_LLM_MAX_TOKENS"), _DEFAULT_MAX_TOKENS
+        )
+        self._llm_temperature = _parse_float(
+            os.environ.get("ASSESS_LLM_TEMPERATURE"), 0.5
+        )
+        self._llm_top_p = _parse_float(os.environ.get("ASSESS_LLM_TOP_P"), 0.9)
 
         self._dynamodb_resource = None
 
@@ -108,9 +201,21 @@ class AssessChanges:
 
         user_data_record = self._load_user_data(normalized_phone)
         conversation_items = self._load_conversation_items(normalized_phone)
+        destination_number = self._extract_to_number(self.event)
+        normalized_destination = _normalize_phone(destination_number)
+        if not normalized_destination and destination_number:
+            normalized_destination = destination_number
+        business_rules = self._load_business_rules(destination_number)
 
-        if user_data_record is not None or conversation_items:
-            payload = self.event.setdefault("assess_changes", {})
+        if (
+            user_data_record is not None
+            or conversation_items
+            or business_rules is not None
+        ):
+            payload = self.event.get("assess_changes")
+            if not isinstance(payload, dict):
+                payload = {}
+                self.event["assess_changes"] = payload
             if user_data_record is not None:
                 payload["user_data"] = user_data_record
                 # Provide a flat "user_name" for convenience in downstream steps.
@@ -127,6 +232,18 @@ class AssessChanges:
                 )
             if conversation_items:
                 payload["conversation_items"] = conversation_items
+            if business_rules is not None:
+                payload["business_rules"] = business_rules
+
+            llm_payload = self._build_llm_payload(
+                normalized_phone,
+                normalized_destination,
+                user_data_record,
+                conversation_items,
+                business_rules,
+            )
+            if llm_payload is not None:
+                payload["llm_request"] = llm_payload
 
         return self.event
 
@@ -164,6 +281,194 @@ class AssessChanges:
                 return raw_from
 
         return None
+
+    # ------------------------------------------------------------------
+    def _extract_to_number(self, event: Dict[str, Any]) -> Optional[str]:
+        """Locate the destination/"to" number for the current event."""
+        if not isinstance(event, dict):
+            return None
+
+        to_number = event.get("to_number")
+        if isinstance(to_number, str) and to_number.strip():
+            return to_number
+
+        input_event = event.get("input")
+        if isinstance(input_event, dict):
+            candidate = input_event.get("to") or input_event.get("to_number")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+
+            dynamodb_payload = input_event.get("dynamodb")
+            if isinstance(dynamodb_payload, dict):
+                new_image = dynamodb_payload.get("NewImage")
+                if isinstance(new_image, dict):
+                    to_attr = new_image.get("to_number")
+                    if isinstance(to_attr, dict):
+                        value = to_attr.get("S")
+                        if isinstance(value, str) and value.strip():
+                            return value
+                    elif isinstance(to_attr, str) and to_attr.strip():
+                        return to_attr
+
+        raw_event = event.get("raw_event")
+        if isinstance(raw_event, dict):
+            raw_to = raw_event.get("to") or raw_event.get("to_number")
+            if isinstance(raw_to, str) and raw_to.strip():
+                return raw_to
+
+        return None
+
+    # ------------------------------------------------------------------
+    def _extract_message_text(self, event: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(event, dict):
+            return None
+
+        message = event.get("text")
+        if isinstance(message, str) and message.strip():
+            return message
+
+        raw_event = event.get("raw_event")
+        if isinstance(raw_event, dict):
+            body = raw_event.get("message_body") or raw_event.get("text")
+            if isinstance(body, str) and body.strip():
+                return body
+
+        input_event = event.get("input")
+        if isinstance(input_event, dict):
+            body = input_event.get("message_body") or input_event.get("text")
+            if isinstance(body, str) and body.strip():
+                return body
+            dynamodb_payload = input_event.get("dynamodb")
+            if isinstance(dynamodb_payload, dict):
+                new_image = dynamodb_payload.get("NewImage")
+                if isinstance(new_image, dict):
+                    text_attr = new_image.get("text")
+                    if isinstance(text_attr, dict):
+                        content = text_attr.get("S")
+                        if isinstance(content, str) and content.strip():
+                            return content
+                    elif isinstance(text_attr, str) and text_attr.strip():
+                        return text_attr
+
+        return None
+
+    # ------------------------------------------------------------------
+    def _determine_user_type(self, user_data: Optional[Dict[str, Any]]) -> str:
+        if isinstance(user_data, dict) and user_data.get("Name"):
+            return "existing_customer"
+        return "new_customer"
+
+    # ------------------------------------------------------------------
+    def _build_prior_context(
+        self,
+        normalized_phone: str,
+        destination_number: Optional[str],
+        user_data: Optional[Dict[str, Any]],
+        conversation_items: List[Dict[str, Any]],
+        business_rules: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        context: Dict[str, Any] = {
+            "phone_number": normalized_phone,
+        }
+        if destination_number:
+            context["business_number"] = destination_number
+
+        if isinstance(user_data, dict) and user_data:
+            context["user_data"] = {
+                key: value
+                for key, value in user_data.items()
+                if isinstance(value, (str, int, float, bool))
+            }
+
+        if conversation_items:
+            recent: List[Dict[str, Any]] = []
+            for item in conversation_items[:5]:
+                if not isinstance(item, dict):
+                    continue
+                recent.append(
+                    {
+                        "from_number": str(item.get("from_number", "")),
+                        "type": str(item.get("type", "")),
+                        "text": str(item.get("text", "")),
+                        "timestamp": str(
+                            item.get("whatsapp_timestamp")
+                            or item.get("created_at")
+                            or ""
+                        ),
+                        "whatsapp_id": str(item.get("whatsapp_id", "")),
+                    }
+                )
+            if recent:
+                context["recent_history"] = recent
+
+        if isinstance(business_rules, dict) and isinstance(
+            business_rules.get("rules_json"), dict
+        ):
+            context["business_rules"] = business_rules["rules_json"]
+
+        return context
+
+    # ------------------------------------------------------------------
+    def _build_system_prompt(
+        self, user_type: str, prior_context: Dict[str, Any]
+    ) -> str:
+        lines = [
+            "You are a smart agent for WhatsApp. Based on the user_type, respond accordingly.",
+            "Extract structured fields and generate a friendly reply. Always return JSON with keys 'response', 'customer_info', and 'interaction_log'.",
+            f"user_type: {user_type}",
+        ]
+
+        if prior_context:
+            serialized_context = json.dumps(
+                prior_context, ensure_ascii=False, separators=(",", ":")
+            )
+            lines.append("Context:")
+            lines.append(serialized_context)
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    def _build_llm_payload(
+        self,
+        normalized_phone: str,
+        destination_number: Optional[str],
+        user_data: Optional[Dict[str, Any]],
+        conversation_items: List[Dict[str, Any]],
+        business_rules: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        user_message = self._extract_message_text(self.event)
+        if not user_message:
+            return None
+
+        user_type = self._determine_user_type(user_data)
+        prior_context = self._build_prior_context(
+            normalized_phone,
+            destination_number,
+            user_data,
+            conversation_items,
+            business_rules,
+        )
+        system_prompt = self._build_system_prompt(user_type, prior_context)
+
+        messages = [
+            {"role": "system", "content": [{"text": system_prompt}]},
+            {"role": "user", "content": [{"text": user_message}]},
+        ]
+
+        inference_config = {
+            "maxTokens": self._llm_max_tokens,
+            "temperature": self._llm_temperature,
+            "topP": self._llm_top_p,
+        }
+
+        return {
+            "model_id": self._llm_model_id,
+            "api": "converse",
+            "messages": messages,
+            "inference_config": inference_config,
+            "user_type": user_type,
+            "prior_context": prior_context,
+        }
 
     # ------------------------------------------------------------------
     def _get_dynamodb_resource(self):
@@ -222,17 +527,25 @@ class AssessChanges:
                     raise
         except (ClientError, BotoCoreError):
             self.logger.exception(
-                "Failed to read user data", extra={"phone": normalized_phone}
+                "Failed to read user data",
+                extra={"phone": normalized_phone},
             )
             return None
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error loading user data", extra={"phone": normalized_phone}
+                "Unexpected error loading user data",
+                extra={"phone": normalized_phone},
             )
             return None
 
         if not isinstance(item, dict):
             return None
+
+        # Some environments store the raw DynamoDB attribute map instead of the
+        # document-deserialised form. Detect that scenario and convert it to a
+        # standard Python dictionary so downstream callers don't have to deal
+        # with AttributeValue wrappers (e.g., {"S": "value"}).
+        item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
         # Canonicalise the returned item: strip whitespace from PK if present.
         pn = item.get("PhoneNumber")
@@ -253,29 +566,124 @@ class AssessChanges:
         if dynamodb is None:
             return []
 
-        partition_key = f"NUMBER#{normalized_phone}"
+        partition_keys = _conversation_key_variants(normalized_phone)
+        if not partition_keys:
+            return []
 
         try:
             table = dynamodb.Table(self._conversation_table_name)
-            response = table.query(
-                KeyConditionExpression=Key("PK").eq(partition_key),
-                Limit=self._CONVERSATION_QUERY_LIMIT,
-            )
-        except (ClientError, BotoCoreError):
-            self.logger.exception(
-                "Failed to query conversation items",
-                extra={"table": self._conversation_table_name, "pk": partition_key},
-            )
-            return []
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error querying conversation items",
-                extra={"table": self._conversation_table_name, "pk": partition_key},
+                "Unexpected error preparing conversation query",
+                extra={"table": self._conversation_table_name},
             )
             return []
 
-        items = response.get("Items") if isinstance(response, dict) else None
-        if not isinstance(items, list):
-            return []
+        for partition_key in partition_keys:
+            try:
+                response = table.query(
+                    KeyConditionExpression=Key("PK").eq(partition_key),
+                    Limit=self._CONVERSATION_QUERY_LIMIT,
+                )
+            except (ClientError, BotoCoreError):
+                self.logger.exception(
+                    "Failed to query conversation items",
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
+                )
+                continue
+            except Exception:  # pragma: no cover
+                self.logger.exception(
+                    "Unexpected error querying conversation items",
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
+                )
+                continue
 
-        return items
+            items = response.get("Items") if isinstance(response, dict) else None
+            if isinstance(items, list) and items:
+                # Some environments return raw AttributeValue maps. Normalize them so
+                # downstream code always receives simple Python dictionaries.
+                normalized: List[Dict[str, Any]] = []
+                for item in items:
+                    if isinstance(item, dict):
+                        normalized.append(
+                            {
+                                key: _unwrap_attribute(value)
+                                for key, value in item.items()
+                            }
+                        )
+                if normalized:
+                    return normalized
+                return items
+
+        return []
+
+    # ------------------------------------------------------------------
+    def _load_business_rules(
+        self, to_number: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        if not self._rules_table_name or not to_number:
+            return None
+
+        dynamodb = self._get_dynamodb_resource()
+        if dynamodb is None:
+            return None
+
+        try:
+            table = dynamodb.Table(self._rules_table_name)
+        except Exception:  # pragma: no cover
+            self.logger.exception(
+                "Unexpected error preparing rules table",
+                extra={"table": self._rules_table_name},
+            )
+            return None
+
+        key_variants = _rules_partition_key_variants(to_number)
+        if not key_variants:
+            return None
+
+        item: Optional[Dict[str, Any]] = None
+        for candidate in key_variants:
+            try:
+                response = table.get_item(
+                    Key={"PK": candidate, "SK": self._rules_version}
+                )
+            except (ClientError, BotoCoreError):
+                self.logger.exception(
+                    "Failed to load business rules",
+                    extra={"table": self._rules_table_name, "pk": candidate},
+                )
+                continue
+            except Exception:  # pragma: no cover
+                self.logger.exception(
+                    "Unexpected error loading business rules",
+                    extra={"table": self._rules_table_name, "pk": candidate},
+                )
+                continue
+
+            data = response.get("Item") if isinstance(response, dict) else None
+            if isinstance(data, dict):
+                item = data
+                break
+
+        if not isinstance(item, dict):
+            return None
+
+        item = {key: _unwrap_attribute(value) for key, value in item.items()}
+
+        rules_blob = item.get("rules_json")
+        if isinstance(rules_blob, str):
+            try:
+                item["rules_json"] = json.loads(rules_blob)
+            except json.JSONDecodeError:
+                self.logger.warning(
+                    "Failed to decode rules_json for business rules",
+                    extra={"pk": item.get("PK")},
+                )
+
+        return item
