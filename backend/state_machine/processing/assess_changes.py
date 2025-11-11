@@ -1,10 +1,11 @@
 """AssessChanges step - enrich events with persisted user context.
 
 This step is feature-gated ("ASSESS_CHANGES_FEATURE") and, when enabled,
-retrieves additional context for the current phone number from two sources:
+retrieves additional context for the current phone number from multiple sources:
 
 * The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
 * The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
+* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars).
 
 The resulting payload is appended to the event so the downstream
 "ProcessText" step can use it without re-querying DynamoDB.
@@ -18,6 +19,7 @@ Change log:
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -99,6 +101,34 @@ def _conversation_key_variants(e164: str) -> List[str]:
     return variants
 
 
+def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
+    """Return candidate PK values for the rules table based on the to-number."""
+    variants: List[str] = []
+    if not number:
+        return variants
+
+    raw = str(number).strip()
+    if not raw:
+        return variants
+
+    def _add(candidate: str) -> None:
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+
+    _add(raw)
+
+    normalized = _normalize_phone(raw)
+    if normalized:
+        _add(normalized)
+        if normalized.startswith("+"):
+            _add(normalized[1:])
+
+    if raw.startswith("+"):
+        _add(raw[1:])
+
+    return variants
+
+
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
@@ -112,6 +142,9 @@ class AssessChanges:
         self._conversation_table_name = os.environ.get(
             "DYNAMODB_TABLE"
         ) or os.environ.get("TABLE_NAME")
+        self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
+            "RULES_TABLE"
+        )
 
         self._dynamodb_resource = None
 
@@ -138,8 +171,13 @@ class AssessChanges:
 
         user_data_record = self._load_user_data(normalized_phone)
         conversation_items = self._load_conversation_items(normalized_phone)
+        business_rules = self._load_business_rules(self._extract_to_number(self.event))
 
-        if user_data_record is not None or conversation_items:
+        if (
+            user_data_record is not None
+            or conversation_items
+            or business_rules is not None
+        ):
             payload = self.event.get("assess_changes")
             if not isinstance(payload, dict):
                 payload = {}
@@ -160,6 +198,8 @@ class AssessChanges:
                 )
             if conversation_items:
                 payload["conversation_items"] = conversation_items
+            if business_rules is not None:
+                payload["business_rules"] = business_rules
 
         return self.event
 
@@ -195,6 +235,42 @@ class AssessChanges:
             raw_from = raw_event.get("from") or raw_event.get("from_number")
             if isinstance(raw_from, str) and raw_from.strip():
                 return raw_from
+
+        return None
+
+    # ------------------------------------------------------------------
+    def _extract_to_number(self, event: Dict[str, Any]) -> Optional[str]:
+        """Locate the destination/"to" number for the current event."""
+        if not isinstance(event, dict):
+            return None
+
+        to_number = event.get("to_number")
+        if isinstance(to_number, str) and to_number.strip():
+            return to_number
+
+        input_event = event.get("input")
+        if isinstance(input_event, dict):
+            candidate = input_event.get("to") or input_event.get("to_number")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+
+            dynamodb_payload = input_event.get("dynamodb")
+            if isinstance(dynamodb_payload, dict):
+                new_image = dynamodb_payload.get("NewImage")
+                if isinstance(new_image, dict):
+                    to_attr = new_image.get("to_number")
+                    if isinstance(to_attr, dict):
+                        value = to_attr.get("S")
+                        if isinstance(value, str) and value.strip():
+                            return value
+                    elif isinstance(to_attr, str) and to_attr.strip():
+                        return to_attr
+
+        raw_event = event.get("raw_event")
+        if isinstance(raw_event, dict):
+            raw_to = raw_event.get("to") or raw_event.get("to_number")
+            if isinstance(raw_to, str) and raw_to.strip():
+                return raw_to
 
         return None
 
@@ -335,3 +411,61 @@ class AssessChanges:
                 return items
 
         return []
+
+    # ------------------------------------------------------------------
+    def _load_business_rules(self, to_number: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not self._rules_table_name or not to_number:
+            return None
+
+        dynamodb = self._get_dynamodb_resource()
+        if dynamodb is None:
+            return None
+
+        try:
+            table = dynamodb.Table(self._rules_table_name)
+        except Exception:  # pragma: no cover
+            self.logger.exception(
+                "Unexpected error preparing rules table", extra={"table": self._rules_table_name}
+            )
+            return None
+
+        key_variants = _rules_partition_key_variants(to_number)
+        if not key_variants:
+            return None
+
+        item: Optional[Dict[str, Any]] = None
+        for candidate in key_variants:
+            try:
+                response = table.get_item(Key={"PK": candidate, "SK": "CURRENT"})
+            except (ClientError, BotoCoreError):
+                self.logger.exception(
+                    "Failed to load business rules", extra={"table": self._rules_table_name, "pk": candidate}
+                )
+                continue
+            except Exception:  # pragma: no cover
+                self.logger.exception(
+                    "Unexpected error loading business rules",
+                    extra={"table": self._rules_table_name, "pk": candidate},
+                )
+                continue
+
+            data = response.get("Item") if isinstance(response, dict) else None
+            if isinstance(data, dict):
+                item = data
+                break
+
+        if not isinstance(item, dict):
+            return None
+
+        item = {key: _unwrap_attribute(value) for key, value in item.items()}
+
+        rules_blob = item.get("rules_json")
+        if isinstance(rules_blob, str):
+            try:
+                item["rules_json"] = json.loads(rules_blob)
+            except json.JSONDecodeError:
+                self.logger.warning(
+                    "Failed to decode rules_json for business rules", extra={"pk": item.get("PK")}
+                )
+
+        return item
