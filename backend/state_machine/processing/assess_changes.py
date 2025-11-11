@@ -33,6 +33,7 @@ from common.logger import custom_logger
 logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
 _HISTORY_LIMIT = 50
+_MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
 _DEFAULT_MODEL_ID = os.environ.get("ASSESS_LLM_MODEL_ID", "amazon.nova-lite-v1:0")
 _DEFAULT_MAX_TOKENS = 1024
 
@@ -73,17 +74,25 @@ def _is_enabled(flag: Optional[str]) -> bool:
 
 
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
-    """Normalise a phone number to E.164 (adds '+' prefix when missing)."""
+    """Normalise a phone number, enforcing an E.164 prefix when possible."""
     if not number:
         return None
+
     trimmed = str(number).strip()
     if not trimmed:
         return None
+
+    digits = "".join(ch for ch in trimmed if ch.isdigit())
+    if not digits:
+        return trimmed if trimmed.startswith("+") else None
+
     if trimmed.startswith("+"):
-        return trimmed
-    if trimmed[0].isdigit():
-        return f"+{trimmed}"
-    return trimmed
+        return f"+{digits}"
+
+    if len(digits) >= _MIN_INTL_DIGITS:
+        return f"+{digits}"
+
+    return digits
 
 
 def _key_variants(e164: str) -> List[str]:
