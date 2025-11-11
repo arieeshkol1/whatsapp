@@ -11,6 +11,9 @@ The resulting payload is appended to the event so the downstream
 
 Change log:
 - Include the new "Name" attribute from "UserData" when present.
+- Make DynamoDB resource region-safe for tests/CI (default: us-east-1).
+- Tolerate bad stored PKs (e.g., trailing newline / missing '+') when reading.
+- Canonicalize returned item to strip whitespace from PhoneNumber.
 """
 
 from __future__ import annotations
@@ -49,6 +52,23 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     return trimmed
 
 
+def _key_variants(e164: str) -> List[str]:
+    """
+    Generate robust variants for lookup to tolerate bad stored keys.
+    Order matters; first successful match wins.
+    """
+    variants: List[str] = []
+    base = e164.strip()
+    variants.append(base)
+    # Common bad write: trailing newline
+    variants.append(base + "\n")
+    # If someone stored without '+'
+    if base.startswith("+"):
+        variants.append(base[1:])
+        variants.append(base[1:] + "\n")
+    return variants
+
+
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
@@ -59,9 +79,9 @@ class AssessChanges:
         self.logger = logger
         self._endpoint_url = os.environ.get("ENDPOINT_URL")
         self._user_data_table_name = os.environ.get("USER_DATA_TABLE")
-        self._conversation_table_name = (
-            os.environ.get("DYNAMODB_TABLE") or os.environ.get("TABLE_NAME")
-        )
+        self._conversation_table_name = os.environ.get(
+            "DYNAMODB_TABLE"
+        ) or os.environ.get("TABLE_NAME")
 
         self._dynamodb_resource = None
 
@@ -98,9 +118,11 @@ class AssessChanges:
                 if isinstance(name_value, str) and name_value.strip():
                     payload["user_name"] = name_value
                 self.logger.debug(
-                    "AssessChanges user_data loaded for %s (Name=%s)",
-                    normalized_phone,
-                    user_data_record.get("Name"),
+                    "AssessChanges user_data loaded",
+                    extra={
+                        "phone": normalized_phone,
+                        "name": user_data_record.get("Name"),
+                    },
                 )
             if conversation_items:
                 payload["conversation_items"] = conversation_items
@@ -146,12 +168,20 @@ class AssessChanges:
     def _get_dynamodb_resource(self):
         if self._dynamodb_resource is None:
             try:
+                # Prefer Lambda/real env; fall back to a default for local tests/moto.
+                region = (
+                    os.environ.get("AWS_REGION")
+                    or os.environ.get("AWS_DEFAULT_REGION")
+                    or "us-east-1"
+                )
                 if self._endpoint_url:
                     self._dynamodb_resource = boto3.resource(
-                        "dynamodb", endpoint_url=self._endpoint_url
+                        "dynamodb", endpoint_url=self._endpoint_url, region_name=region
                     )
                 else:
-                    self._dynamodb_resource = boto3.resource("dynamodb")
+                    self._dynamodb_resource = boto3.resource(
+                        "dynamodb", region_name=region
+                    )
             except Exception:  # pragma: no cover
                 self.logger.exception(
                     "Failed to initialise DynamoDB resource for AssessChanges"
@@ -166,6 +196,7 @@ class AssessChanges:
 
         Since DynamoDB items are schemaless for non-key attributes, if the "Name"
         attribute exists for the item, it will be returned as part of the full item.
+        This method also tolerates bad stored keys (trailing newline / missing '+').
         """
         if not self._user_data_table_name:
             return None
@@ -176,7 +207,18 @@ class AssessChanges:
 
         try:
             table = dynamodb.Table(self._user_data_table_name)
-            response = table.get_item(Key={"PhoneNumber": normalized_phone})
+            # Try a few variants to tolerate bad stored keys (e.g., trailing newline).
+            response = None
+            item = None
+            for candidate in _key_variants(normalized_phone):
+                try:
+                    response = table.get_item(Key={"PhoneNumber": candidate})
+                    item = response.get("Item") if isinstance(response, dict) else None
+                    if isinstance(item, dict):
+                        break
+                except (ClientError, BotoCoreError):
+                    # Will be caught by outer except
+                    raise
         except (ClientError, BotoCoreError):
             self.logger.exception(
                 "Failed to read user data", extra={"phone": normalized_phone}
@@ -188,8 +230,18 @@ class AssessChanges:
             )
             return None
 
-        item = response.get("Item") if isinstance(response, dict) else None
-        return item if isinstance(item, dict) else None
+        if not isinstance(item, dict):
+            return None
+
+        # Canonicalise the returned item: strip whitespace from PK if present.
+        pn = item.get("PhoneNumber")
+        if isinstance(pn, str):
+            item["PhoneNumber"] = pn.strip()
+        name_val = item.get("Name")
+        if isinstance(name_val, str) and not name_val.strip():
+            # Normalise empty strings to missing to avoid confusing downstream checks.
+            item.pop("Name", None)
+        return item
 
     # ------------------------------------------------------------------
     def _load_conversation_items(self, normalized_phone: str) -> List[Dict[str, Any]]:
