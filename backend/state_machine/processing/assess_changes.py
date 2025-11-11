@@ -5,8 +5,7 @@ retrieves additional context for the current phone number from multiple sources:
 
 * The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
 * The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
-* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars; version via
-  "RULESET_VERSION", default: "CURRENT").
+* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars).
 
 The resulting payload is appended to the event so the downstream
 "ProcessText" step can use it without re-querying DynamoDB.
@@ -36,22 +35,6 @@ from common.logger import custom_logger
 
 logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
-
-# --- Configurable knobs via env ---
-_MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
-_ENABLE_TOLERANT_SCAN = (
-    os.environ.get("ASSESS_TOLERANT_SCAN", "false").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
-_HISTORY_LIMIT = int(os.environ.get("ASSESS_HISTORY_LIMIT", "50"))
-_INCLUDE_HISTORY_SUMMARY = (
-    os.environ.get("ASSESS_INCLUDE_HISTORY_SUMMARY", "true").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
-_INCLUDE_RULES_INLINE = (
-    os.environ.get("ASSESS_INCLUDE_RULES_INLINE", "true").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
 
 
 def _unwrap_attribute(value: Any) -> Any:
@@ -160,18 +143,19 @@ def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
+    _CONVERSATION_QUERY_LIMIT = 50
+
     def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
         self.event = event if isinstance(event, dict) else {}
         self.logger = logger
         self._endpoint_url = os.environ.get("ENDPOINT_URL")
         self._user_data_table_name = os.environ.get("USER_DATA_TABLE")
-        self._conversation_table_name = os.environ.get("DYNAMODB_TABLE") or os.environ.get(
-            "TABLE_NAME"
-        )
+        self._conversation_table_name = os.environ.get(
+            "DYNAMODB_TABLE"
+        ) or os.environ.get("TABLE_NAME")
         self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
             "RULES_TABLE"
         )
-        self._rules_version = os.environ.get("RULESET_VERSION", "CURRENT")
 
         self._dynamodb_resource = None
 
@@ -251,16 +235,8 @@ class AssessChanges:
                 )
             if conversation_items:
                 payload["conversation_items"] = conversation_items
-                if _INCLUDE_HISTORY_SUMMARY:
-                    payload["conversation_summary"] = self._summarize_history(
-                        conversation_items
-                    )
             if business_rules is not None:
                 payload["business_rules"] = business_rules
-                if _INCLUDE_RULES_INLINE and isinstance(
-                    business_rules.get("rules_json"), dict
-                ):
-                    payload["rules"] = business_rules["rules_json"]
 
         return self.event
 
@@ -336,7 +312,7 @@ class AssessChanges:
         return None
 
     # ------------------------------------------------------------------
-    def _get_dynamodb_resource(self):  # -> Optional[boto3.resources.base.ServiceResource]
+    def _get_dynamodb_resource(self):
         if self._dynamodb_resource is None:
             try:
                 # Prefer Lambda/real env; fall back to a default for local tests/moto.
@@ -378,10 +354,28 @@ class AssessChanges:
 
         try:
             table = dynamodb.Table(self._user_data_table_name)
+            # Try a few variants to tolerate bad stored keys (e.g., trailing newline).
+            response = None
+            item = None
+            for candidate in _key_variants(normalized_phone):
+                try:
+                    response = table.get_item(Key={"PhoneNumber": candidate})
+                    item = response.get("Item") if isinstance(response, dict) else None
+                    if isinstance(item, dict):
+                        break
+                except (ClientError, BotoCoreError):
+                    # Will be caught by outer except
+                    raise
+        except (ClientError, BotoCoreError):
+            self.logger.exception(
+                "Failed to read user data",
+                extra={"phone": normalized_phone},
+            )
+            return None
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error preparing user data table",
-                extra={"table": self._user_data_table_name},
+                "Unexpected error loading user data",
+                extra={"phone": normalized_phone},
             )
             return None
 
@@ -426,10 +420,12 @@ class AssessChanges:
             return None
 
         # Some environments store the raw DynamoDB attribute map instead of the
-        # document-deserialized form. Convert to plain dict of scalars.
+        # document-deserialised form. Detect that scenario and convert it to a
+        # standard Python dictionary so downstream callers don't have to deal
+        # with AttributeValue wrappers (e.g., {"S": "value"}).
         item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
-        # Canonicalize common fields
+        # Canonicalise the returned item: strip whitespace from PK if present.
         pn = item.get("PhoneNumber")
         if isinstance(pn, str):
             item["PhoneNumber"] = pn.strip()
@@ -465,73 +461,41 @@ class AssessChanges:
             )
             return []
 
-        # Prefer newest-first, and project only relevant attributes.
-        expr_names = {
-            "#pk": "PK",
-            "#sk": "SK",
-            "#txt": "text",
-            "#wa": "whatsapp_id",
-            "#ts": "whatsapp_timestamp",
-            "#ca": "created_at",
-            "#fn": "from_number",
-            "#tp": "type",
-        }
-        projection = (
-            "#pk,#sk,#txt,#wa,#ts,#ca,#fn,#tp"
-        )  # add more names if you need them downstream
-
         for partition_key in partition_keys:
             try:
                 response = table.query(
                     KeyConditionExpression=Key("PK").eq(partition_key),
-                    Limit=_HISTORY_LIMIT,
-                    ScanIndexForward=False,  # newest first
-                    ProjectionExpression=projection,
-                    ExpressionAttributeNames=expr_names,
+                    Limit=self._CONVERSATION_QUERY_LIMIT,
                 )
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to query conversation items",
-                    extra={"table": self._conversation_table_name, "pk": partition_key},
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
                 )
                 continue
             except Exception:  # pragma: no cover
                 self.logger.exception(
                     "Unexpected error querying conversation items",
-                    extra={"table": self._conversation_table_name, "pk": partition_key},
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
                 )
                 continue
 
             items = response.get("Items") if isinstance(response, dict) else None
             if isinstance(items, list) and items:
-                # Normalize attribute-wrapped forms if present
-                normalized: List[Dict[str, Any]] = []
-                for it in items:
-                    if isinstance(it, dict):
-                        normalized.append({k: _unwrap_attribute(v) for k, v in it.items()})
-                return normalized
+                return items
 
         return []
 
     # ------------------------------------------------------------------
-    def _summarize_history(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not items:
-            return {}
-        # Items are newest-first; compute simple summary
-        newest = items[0]
-        oldest = items[-1]
-        return {
-            "count": len(items),
-            "newest_text": newest.get("text"),
-            "newest_timestamp": newest.get("whatsapp_timestamp")
-            or newest.get("created_at"),
-            "newest_wa_id": newest.get("whatsapp_id"),
-            "oldest_timestamp": oldest.get("whatsapp_timestamp")
-            or oldest.get("created_at"),
-        }
-
-    # ------------------------------------------------------------------
-    def _load_business_rules(self, to_number: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _load_business_rules(
+        self, to_number: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
         if not self._rules_table_name or not to_number:
             return None
 
@@ -555,7 +519,7 @@ class AssessChanges:
         item: Optional[Dict[str, Any]] = None
         for candidate in key_variants:
             try:
-                response = table.get_item(Key={"PK": candidate, "SK": self._rules_version})
+                response = table.get_item(Key={"PK": candidate, "SK": "CURRENT"})
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to load business rules",
@@ -580,11 +544,6 @@ class AssessChanges:
         item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
         rules_blob = item.get("rules_json")
-        if isinstance(rules_blob, bytes):
-            try:
-                rules_blob = rules_blob.decode("utf-8", errors="replace")
-            except Exception:  # pragma: no cover
-                rules_blob = None
         if isinstance(rules_blob, str):
             try:
                 item["rules_json"] = json.loads(rules_blob)
@@ -593,6 +552,5 @@ class AssessChanges:
                     "Failed to decode rules_json for business rules",
                     extra={"pk": item.get("PK")},
                 )
-        # If dict, leave as-is
 
         return item
