@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import BotoCoreError, ClientError
-
 from common.logger import custom_logger
 
 logger = custom_logger()
