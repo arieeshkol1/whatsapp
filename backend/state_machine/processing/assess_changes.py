@@ -117,19 +117,21 @@ def _coerce_int(value: Any) -> Optional[int]:
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
     """Normalize a phone number to E.164 conservatively.
 
-    - If already starts with '+', return as-is (stripped).
-    - If digits >= _MIN_INTL_DIGITS, assume it's an international number and prefix '+'.
-    - Otherwise return the trimmed input to avoid making a bad E.164.
+    - If input already starts with '+', return it as-is (trimmed) to preserve stored keys.
+    - If digits >= _MIN_INTL_DIGITS, assume international and prefix '+'.
+    - Otherwise return the trimmed input.
     """
     if not number:
         return None
     trimmed = str(number).strip()
     if not trimmed:
         return None
-    digits = "".join(ch for ch in trimmed if ch.isdigit())
-    if trimmed.startswith("+"):
-        return f"+{digits}"
 
+    # IMPORTANT: do not rewrite already '+' numbers to '+digits' — it can break key matches
+    if trimmed.startswith("+"):
+        return trimmed
+
+    digits = "".join(ch for ch in trimmed if ch.isdigit())
     min_intl_digits = globals().get("_MIN_INTL_DIGITS")
     if not isinstance(min_intl_digits, int) or min_intl_digits < 0:
         try:
@@ -366,6 +368,7 @@ class AssessChanges:
         conversation_items = self._load_conversation_items(
             normalized_phone,
             conversation_id,
+            phone_number,
             normalized_destination,
             destination_number,
         )
@@ -903,9 +906,10 @@ class AssessChanges:
         if not partition_keys:
             return []
 
-        history_limit = self._conversation_history_limit
-        if history_limit <= 0:
-            return []
+        # Clamp history limit to 1.._MAX_RECENT_HISTORY (10)
+        history_limit = self._conversation_history_limit or 1
+        if history_limit < 1:
+            history_limit = 1
         if history_limit > _MAX_RECENT_HISTORY:
             history_limit = _MAX_RECENT_HISTORY
 
@@ -921,17 +925,25 @@ class AssessChanges:
         prefer_filtered = conversation_id is not None and conversation_id > 0
 
         for partition_key in partition_keys:
+            # Try a filtered pass by conversation_id first (if provided), then unfiltered
             attempts = (True, False) if prefer_filtered else (False,)
 
             for use_filter in attempts:
                 collected: List[Dict[str, Any]] = []
                 last_evaluated_key: Optional[Dict[str, Any]] = None
 
+                # When filtering, use a larger page size since FilterExpression is applied after fetch
+                page_limit = (
+                    max(history_limit, 50)
+                    if use_filter and prefer_filtered
+                    else history_limit
+                )
+
                 while True:
                     query_kwargs: Dict[str, Any] = {
                         "KeyConditionExpression": Key("PK").eq(partition_key),
-                        "ScanIndexForward": False,
-                        "Limit": history_limit,
+                        "ScanIndexForward": False,  # newest first
+                        "Limit": page_limit,
                     }
                     if use_filter and prefer_filtered:
                         query_kwargs["FilterExpression"] = Attr("conversation_id").eq(
@@ -993,9 +1005,8 @@ class AssessChanges:
                         break
 
                 if collected:
-                    if len(collected) > history_limit:
-                        collected = collected[:history_limit]
-                    return collected
+                    # Always return newest-first up to history_limit (10)
+                    return collected[:history_limit]
 
         return []
 
