@@ -37,6 +37,7 @@ logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
 _DEFAULT_HISTORY_LIMIT = 50
 _DEV_HISTORY_LIMIT = 10
+_MAX_RECENT_HISTORY = 10
 _DEV_HISTORY_TABLES: Set[str] = {"aws-wpp-dev"}
 try:
     _MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
@@ -660,7 +661,7 @@ class AssessChanges:
 
         recent: List[Dict[str, Any]] = []
         if conversation_items:
-            for item in conversation_items[:5]:
+            for item in conversation_items[:_MAX_RECENT_HISTORY]:
                 if not isinstance(item, dict):
                     continue
                 recent.append(
@@ -902,6 +903,12 @@ class AssessChanges:
         if not partition_keys:
             return []
 
+        history_limit = self._conversation_history_limit
+        if history_limit <= 0:
+            return []
+        if history_limit > _MAX_RECENT_HISTORY:
+            history_limit = _MAX_RECENT_HISTORY
+
         try:
             table = dynamodb.Table(self._conversation_table_name)
         except Exception:  # pragma: no cover
@@ -915,16 +922,12 @@ class AssessChanges:
             collected: List[Dict[str, Any]] = []
             last_evaluated_key: Optional[Dict[str, Any]] = None
 
-            while True:
+            while len(collected) < history_limit:
                 query_kwargs: Dict[str, Any] = {
                     "KeyConditionExpression": Key("PK").eq(partition_key),
                     "ScanIndexForward": False,
-                    "Limit": self._conversation_history_limit,
+                    "Limit": history_limit,
                 }
-                if conversation_id is not None and conversation_id > 0:
-                    query_kwargs["FilterExpression"] = Attr("conversation_id").eq(
-                        conversation_id
-                    )
                 if last_evaluated_key:
                     query_kwargs["ExclusiveStartKey"] = last_evaluated_key
 
@@ -953,8 +956,10 @@ class AssessChanges:
 
                 items = response.get("Items") if isinstance(response, dict) else None
                 if isinstance(items, list) and items:
-                    collected.extend(items)
-                    if len(collected) >= self._conversation_history_limit:
+                    collected.extend(
+                        item for item in items if isinstance(item, dict)
+                    )
+                    if len(collected) >= history_limit:
                         break
 
                 last_evaluated_key = (
@@ -966,19 +971,27 @@ class AssessChanges:
                     break
 
             if collected:
-                sliced = collected[: self._conversation_history_limit]
-                normalized: List[Dict[str, Any]] = []
-                for item in sliced:
-                    if isinstance(item, dict):
-                        normalized.append(
-                            {
-                                key: _unwrap_attribute(value)
-                                for key, value in item.items()
-                            }
-                        )
-                if normalized:
-                    return normalized
-                return sliced
+                sliced = collected[:history_limit]
+                normalized: List[Dict[str, Any]] = [
+                    {
+                        key: _unwrap_attribute(value)
+                        for key, value in item.items()
+                    }
+                    for item in sliced
+                ]
+
+                selected: List[Dict[str, Any]] = normalized
+                if conversation_id is not None and conversation_id > 0:
+                    filtered: List[Dict[str, Any]] = []
+                    for item in normalized:
+                        conv_value = _coerce_int(item.get("conversation_id"))
+                        if conv_value == conversation_id:
+                            filtered.append(item)
+                    if filtered:
+                        selected = filtered[:history_limit]
+
+                if selected:
+                    return selected[:history_limit]
 
         return []
 

@@ -67,3 +67,38 @@ def test_rules_partition_key_variants_handle_trailing_newline():
     assert "972502649476\n" in variants
     assert "RULESET#972502649476" in variants
     assert "RULESET#972502649476\n" in variants
+
+
+def test_prior_context_limits_recent_history_to_maximum():
+    module = _load_module()
+
+    processor = module.AssessChanges({})
+
+    over_limit = module._MAX_RECENT_HISTORY + 5
+    conversation_items = [
+        {
+            "from_number": f"from-{idx}",
+            "type": "text",
+            "text": f"message-{idx}",
+            "whatsapp_timestamp": f"{idx}",
+            "whatsapp_id": f"id-{idx}",
+        }
+        for idx in range(over_limit)
+    ]
+
+    context = processor._build_prior_context(
+        "+1234567890",
+        "+1987654321",
+        "phone-id",
+        42,
+        {"Name": "Tester"},
+        conversation_items,
+        None,
+    )
+
+    assert context["recent_history_count"] == module._MAX_RECENT_HISTORY
+    assert len(context["recent_history"]) == module._MAX_RECENT_HISTORY
+    assert context["recent_history"][0]["text"] == "message-0"
+    assert context["recent_history"][-1]["text"] == (
+        f"message-{module._MAX_RECENT_HISTORY - 1}"
+    )
