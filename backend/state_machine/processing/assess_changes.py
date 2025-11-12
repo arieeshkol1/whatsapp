@@ -177,7 +177,7 @@ def _conversation_key_variants(e164: str) -> List[str]:
 
     base = e164.strip()
     if not base:
-        return variants
+        return prefixed
 
     raw_candidates: List[str] = [base]
     if base.startswith("+"):
@@ -192,7 +192,65 @@ def _conversation_key_variants(e164: str) -> List[str]:
         _add(candidate)
         _add(f"{candidate}\n")
 
-    return variants
+    def _append_variant(value: str) -> None:
+        if value and value not in variants:
+            variants.append(value)
+
+    for candidate in raw_candidates:
+        prefixed = f"NUMBER#{candidate}"
+        _append_variant(prefixed)
+        _append_variant(f"{prefixed}\n")
+
+    for candidate in raw_candidates:
+        _append_variant(candidate)
+        _append_variant(f"{candidate}\n")
+
+    for candidate in raw_candidates:
+        prefixed_key = f"NUMBER#{candidate}"
+        if prefixed_key not in prefixed:
+            prefixed.append(prefixed_key)
+
+    for candidate in raw_candidates:
+        if candidate not in prefixed:
+            prefixed.append(candidate)
+
+    return prefixed
+
+
+def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
+    """Combine conversation key variants for the supplied phone numbers."""
+
+    collected: List[str] = []
+
+    for value in numbers:
+        if not isinstance(value, str):
+            continue
+        trimmed = value.strip()
+        if not trimmed:
+            continue
+        for candidate in _conversation_key_variants(trimmed):
+            if candidate not in collected:
+                collected.append(candidate)
+
+    return collected
+
+
+def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
+    """Combine conversation key variants for the supplied phone numbers."""
+
+    collected: List[str] = []
+
+    for value in numbers:
+        if not isinstance(value, str):
+            continue
+        trimmed = value.strip()
+        if not trimmed:
+            continue
+        for candidate in _conversation_key_variants(trimmed):
+            if candidate not in collected:
+                collected.append(candidate)
+
+    return collected
 
 
 def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
