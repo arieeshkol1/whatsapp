@@ -132,6 +132,8 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
         return trimmed
 
     digits = "".join(ch for ch in trimmed if ch.isdigit())
+
+    digits = "".join(ch for ch in trimmed if ch.isdigit())
     min_intl_digits = globals().get("_MIN_INTL_DIGITS")
     if not isinstance(min_intl_digits, int) or min_intl_digits < 0:
         try:
@@ -922,22 +924,30 @@ class AssessChanges:
             )
             return []
 
-        prefer_filtered = conversation_id is not None and conversation_id > 0
+        history_limit = self._conversation_history_limit
+        if history_limit is None or history_limit <= 0:
+            history_limit = 10
+        history_limit = min(history_limit, 10)
+        if history_limit <= 0:
+            history_limit = 1
 
         for partition_key in partition_keys:
-            # Try a filtered pass by conversation_id first (if provided), then unfiltered
-            attempts = (True, False) if prefer_filtered else (False,)
+            collected: List[Dict[str, Any]] = []
+            last_evaluated_key: Optional[Dict[str, Any]] = None
 
-            for use_filter in attempts:
-                collected: List[Dict[str, Any]] = []
-                last_evaluated_key: Optional[Dict[str, Any]] = None
-
-                # When filtering, use a larger page size since FilterExpression is applied after fetch
-                page_limit = (
-                    max(history_limit, 50)
-                    if use_filter and prefer_filtered
-                    else history_limit
-                )
+            while True:
+                query_kwargs: Dict[str, Any] = {
+                    "KeyConditionExpression": Key("PK").eq(partition_key)
+                    & Key("SK").begins_with("MESSAGE#"),
+                    "ScanIndexForward": False,
+                    "Limit": history_limit,
+                }
+                if conversation_id is not None and conversation_id > 0:
+                    query_kwargs["FilterExpression"] = Attr("conversation_id").eq(
+                        conversation_id
+                    )
+                if last_evaluated_key:
+                    query_kwargs["ExclusiveStartKey"] = last_evaluated_key
 
                 while True:
                     query_kwargs: Dict[str, Any] = {
@@ -1001,12 +1011,37 @@ class AssessChanges:
                         if isinstance(response, dict)
                         else None
                     )
-                    if not last_evaluated_key:
+                    collected = []
+                    break
+
+                items = response.get("Items") if isinstance(response, dict) else None
+                if isinstance(items, list) and items:
+                    collected.extend(items)
+                    if len(collected) >= history_limit:
                         break
 
-                if collected:
-                    # Always return newest-first up to history_limit (10)
-                    return collected[:history_limit]
+                last_evaluated_key = (
+                    response.get("LastEvaluatedKey")
+                    if isinstance(response, dict)
+                    else None
+                )
+                if not last_evaluated_key:
+                    break
+
+            if collected:
+                sliced = collected[:history_limit]
+                normalized: List[Dict[str, Any]] = []
+                for item in sliced:
+                    if isinstance(item, dict):
+                        normalized.append(
+                            {
+                                key: _unwrap_attribute(value)
+                                for key, value in item.items()
+                            }
+                        )
+                if normalized:
+                    return normalized
+                return sliced
 
         return []
 
