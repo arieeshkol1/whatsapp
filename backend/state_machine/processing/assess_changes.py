@@ -164,24 +164,37 @@ def _key_variants(e164: str) -> List[str]:
     return variants
 
 
-def _conversation_key_variants(e164: str) -> List[str]:
+def _conversation_key_variants(e164: Optional[str]) -> List[str]:
     """Return candidate partition keys for the conversation history table."""
+
+    if not isinstance(e164, str):
+        return []
 
     base = e164.strip()
     if not base:
         return []
 
+    raw_candidates: List[str] = [base]
+    if base.startswith("+"):
+        without_plus = base[1:]
+        if without_plus:
+            raw_candidates.append(without_plus)
+
     variants: List[str] = []
     seen: Set[str] = set()
 
-    def _add(candidate: Optional[str]) -> None:
-        if candidate and candidate not in seen:
-            variants.append(candidate)
-            seen.add(candidate)
+    def _add(value: Optional[str]) -> None:
+        if value and value not in seen:
+            variants.append(value)
+            seen.add(value)
 
-    raw_candidates: List[str] = [base]
-    if base.startswith("+"):
-        raw_candidates.append(base[1:])
+    for candidate in raw_candidates:
+        _add(f"NUMBER#{candidate}")
+        _add(f"NUMBER#{candidate}\n")
+
+    for candidate in raw_candidates:
+        _add(candidate)
+        _add(f"{candidate}\n")
 
     for candidate in raw_candidates:
         prefixed = f"NUMBER#{candidate}"
@@ -246,6 +259,21 @@ def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
         if not trimmed:
             continue
         for candidate in _conversation_key_variants(trimmed):
+            if candidate not in seen:
+                collected.append(candidate)
+                seen.add(candidate)
+
+    return collected
+
+
+def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
+    """Combine conversation key variants for the supplied phone numbers."""
+
+    collected: List[str] = []
+    seen: Set[str] = set()
+
+    for value in numbers:
+        for candidate in _conversation_key_variants(value):
             if candidate not in seen:
                 collected.append(candidate)
                 seen.add(candidate)
