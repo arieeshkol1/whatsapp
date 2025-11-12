@@ -942,10 +942,6 @@ class AssessChanges:
                     "ScanIndexForward": False,
                     "Limit": history_limit,
                 }
-                if conversation_id is not None and conversation_id > 0:
-                    query_kwargs["FilterExpression"] = Attr("conversation_id").eq(
-                        conversation_id
-                    )
                 if last_evaluated_key:
                     query_kwargs["ExclusiveStartKey"] = last_evaluated_key
 
@@ -1016,9 +1012,17 @@ class AssessChanges:
 
                 items = response.get("Items") if isinstance(response, dict) else None
                 if isinstance(items, list) and items:
-                    collected.extend(items)
-                    if len(collected) >= history_limit:
-                        break
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        collected.append(
+                            {
+                                key: _unwrap_attribute(value)
+                                for key, value in item.items()
+                            }
+                        )
+                        if len(collected) >= history_limit:
+                            break
 
                 last_evaluated_key = (
                     response.get("LastEvaluatedKey")
@@ -1029,19 +1033,7 @@ class AssessChanges:
                     break
 
             if collected:
-                sliced = collected[:history_limit]
-                normalized: List[Dict[str, Any]] = []
-                for item in sliced:
-                    if isinstance(item, dict):
-                        normalized.append(
-                            {
-                                key: _unwrap_attribute(value)
-                                for key, value in item.items()
-                            }
-                        )
-                if normalized:
-                    return normalized
-                return sliced
+                return collected[:history_limit]
 
         return []
 
