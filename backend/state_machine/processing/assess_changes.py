@@ -819,10 +819,7 @@ class AssessChanges:
                     "ScanIndexForward": False,
                     "Limit": self._conversation_history_limit,
                 }
-                if (
-                    conversation_id is not None
-                    and conversation_id > 0
-                ):
+                if conversation_id is not None and conversation_id > 0:
                     query_kwargs["FilterExpression"] = Attr("conversation_id").eq(
                         conversation_id
                     )
@@ -913,9 +910,7 @@ class AssessChanges:
         for partition_key in key_variants:
             for sort_key in sort_key_variants:
                 try:
-                    response = table.get_item(
-                        Key={"PK": partition_key, "SK": sort_key}
-                    )
+                    response = table.get_item(Key={"PK": partition_key, "SK": sort_key})
                 except (ClientError, BotoCoreError):
                     self.logger.exception(
                         "Failed to load business rules",
