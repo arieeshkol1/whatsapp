@@ -975,10 +975,9 @@ class AssessChanges:
                         ):
                             matches.append(item)
 
-                    if (
-                        conversation_id is None
-                        or conversation_id <= 0
-                    ) and len(collected) >= history_limit:
+                    if (conversation_id is None or conversation_id <= 0) and len(
+                        collected
+                    ) >= history_limit:
                         break
                     if (
                         conversation_id is not None
