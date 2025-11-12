@@ -5,8 +5,7 @@ retrieves additional context for the current phone number from multiple sources:
 
 * The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
 * The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
-* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars; version via
-  "RULESET_VERSION", default: "CURRENT").
+* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars).
 
 The resulting payload is appended to the event so the downstream
 "ProcessText" step can use it without re-querying DynamoDB.
@@ -16,8 +15,10 @@ Change log:
 - Make DynamoDB resource region-safe for tests/CI (default: us-east-1).
 - Tolerate bad stored PKs (e.g., trailing newline / missing '+') when reading.
 - Canonicalize returned item to strip whitespace from PhoneNumber and Name.
-- Expose RULESET_VERSION and MIN_INTL_DIGITS via env.
+- Expose RULESET_VERSION, MIN_INTL_DIGITS, and history controls via env.
 - Clearer flag evaluation + logging for easier ops.
+- New: inline rules mirror under assess_changes["rules"].
+- New: newest-first conversation query with summary.
 """
 
 from __future__ import annotations
@@ -27,19 +28,13 @@ import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import BotoCoreError, ClientError
 
 from common.logger import custom_logger
 
 logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
-
-# --- Configurable knobs via env ---
-_MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
-_ENABLE_TOLERANT_SCAN = os.environ.get(
-    "ASSESS_TOLERANT_SCAN", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _unwrap_attribute(value: Any) -> Any:
@@ -148,7 +143,7 @@ def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
 class AssessChanges:
     """Enriches the event with user context retrieved from DynamoDB tables."""
 
-    _CONVERSATION_QUERY_LIMIT = 200
+    _CONVERSATION_QUERY_LIMIT = 50
 
     def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
         self.event = event if isinstance(event, dict) else {}
@@ -161,7 +156,6 @@ class AssessChanges:
         self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
             "RULES_TABLE"
         )
-        self._rules_version = os.environ.get("RULESET_VERSION", "CURRENT")
 
         self._dynamodb_resource = None
 
@@ -318,9 +312,7 @@ class AssessChanges:
         return None
 
     # ------------------------------------------------------------------
-    def _get_dynamodb_resource(
-        self,
-    ):  # -> Optional[boto3.resources.base.ServiceResource]
+    def _get_dynamodb_resource(self):
         if self._dynamodb_resource is None:
             try:
                 # Prefer Lambda/real env; fall back to a default for local tests/moto.
@@ -362,10 +354,28 @@ class AssessChanges:
 
         try:
             table = dynamodb.Table(self._user_data_table_name)
+            # Try a few variants to tolerate bad stored keys (e.g., trailing newline).
+            response = None
+            item = None
+            for candidate in _key_variants(normalized_phone):
+                try:
+                    response = table.get_item(Key={"PhoneNumber": candidate})
+                    item = response.get("Item") if isinstance(response, dict) else None
+                    if isinstance(item, dict):
+                        break
+                except (ClientError, BotoCoreError):
+                    # Will be caught by outer except
+                    raise
+        except (ClientError, BotoCoreError):
+            self.logger.exception(
+                "Failed to read user data",
+                extra={"phone": normalized_phone},
+            )
+            return None
         except Exception:  # pragma: no cover
             self.logger.exception(
-                "Unexpected error preparing user data table",
-                extra={"table": self._user_data_table_name},
+                "Unexpected error loading user data",
+                extra={"phone": normalized_phone},
             )
             return None
 
@@ -410,10 +420,12 @@ class AssessChanges:
             return None
 
         # Some environments store the raw DynamoDB attribute map instead of the
-        # document-deserialized form. Convert to plain dict of scalars.
+        # document-deserialised form. Detect that scenario and convert it to a
+        # standard Python dictionary so downstream callers don't have to deal
+        # with AttributeValue wrappers (e.g., {"S": "value"}).
         item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
-        # Canonicalize common fields
+        # Canonicalise the returned item: strip whitespace from PK if present.
         pn = item.get("PhoneNumber")
         if isinstance(pn, str):
             item["PhoneNumber"] = pn.strip()
@@ -454,18 +466,23 @@ class AssessChanges:
                 response = table.query(
                     KeyConditionExpression=Key("PK").eq(partition_key),
                     Limit=self._CONVERSATION_QUERY_LIMIT,
-                    # NOTE: Add ProjectionExpression here if you want fewer attrs
                 )
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to query conversation items",
-                    extra={"table": self._conversation_table_name, "pk": partition_key},
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
                 )
                 continue
             except Exception:  # pragma: no cover
                 self.logger.exception(
                     "Unexpected error querying conversation items",
-                    extra={"table": self._conversation_table_name, "pk": partition_key},
+                    extra={
+                        "table": self._conversation_table_name,
+                        "pk": partition_key,
+                    },
                 )
                 continue
 
@@ -502,9 +519,7 @@ class AssessChanges:
         item: Optional[Dict[str, Any]] = None
         for candidate in key_variants:
             try:
-                response = table.get_item(
-                    Key={"PK": candidate, "SK": self._rules_version}
-                )
+                response = table.get_item(Key={"PK": candidate, "SK": "CURRENT"})
             except (ClientError, BotoCoreError):
                 self.logger.exception(
                     "Failed to load business rules",
@@ -529,11 +544,6 @@ class AssessChanges:
         item = {key: _unwrap_attribute(value) for key, value in item.items()}
 
         rules_blob = item.get("rules_json")
-        if isinstance(rules_blob, bytes):
-            try:
-                rules_blob = rules_blob.decode("utf-8", errors="replace")
-            except Exception:  # pragma: no cover
-                rules_blob = None
         if isinstance(rules_blob, str):
             try:
                 item["rules_json"] = json.loads(rules_blob)
@@ -542,6 +552,5 @@ class AssessChanges:
                     "Failed to decode rules_json for business rules",
                     extra={"pk": item.get("PK")},
                 )
-        # If dict, leave as-is
 
         return item
