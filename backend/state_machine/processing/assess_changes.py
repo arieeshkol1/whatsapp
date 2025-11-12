@@ -372,10 +372,16 @@ class AssessChanges:
                         "has_name": bool(user_data_record.get("Name")),
                     },
                 )
-            if conversation_items:
-                payload["conversation_items"] = conversation_items
+            history_items: List[Dict[str, Any]] = []
+            if isinstance(conversation_items, list):
+                history_items = conversation_items
+            if history_items or user_data_record is not None or business_rules is not None:
+                payload["conversation_items"] = history_items
+                payload["conversation_history_count"] = len(history_items)
+
             if business_rules is not None:
                 payload["business_rules"] = business_rules
+            payload["business_rules_present"] = business_rules is not None
 
             llm_payload = self._build_llm_payload(
                 normalized_phone,
@@ -574,8 +580,8 @@ class AssessChanges:
                 if isinstance(value, (str, int, float, bool))
             }
 
+        recent: List[Dict[str, Any]] = []
         if conversation_items:
-            recent: List[Dict[str, Any]] = []
             for item in conversation_items[:5]:
                 if not isinstance(item, dict):
                     continue
@@ -592,12 +598,15 @@ class AssessChanges:
                         "whatsapp_id": str(item.get("whatsapp_id", "")),
                     }
                 )
-            if recent:
-                context["recent_history"] = recent
+        context["recent_history"] = recent
+        context["recent_history_count"] = len(recent)
 
-        if isinstance(business_rules, dict) and isinstance(
-            business_rules.get("rules_json"), dict
-        ):
+        has_rules = (
+            isinstance(business_rules, dict)
+            and isinstance(business_rules.get("rules_json"), dict)
+        )
+        context["has_business_rules"] = has_rules
+        if has_rules:
             context["business_rules"] = business_rules["rules_json"]
 
         return context
