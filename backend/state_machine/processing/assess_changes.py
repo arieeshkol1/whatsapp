@@ -125,6 +125,7 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     trimmed = str(number).strip()
     if not trimmed:
         return None
+    digits = "".join(ch for ch in trimmed if ch.isdigit())
     if trimmed.startswith("+"):
         return f"+{digits}"
 
@@ -162,21 +163,31 @@ def _key_variants(e164: str) -> List[str]:
 
 def _conversation_key_variants(e164: str) -> List[str]:
     """Return candidate partition keys for the conversation history table."""
-    variants: List[str] = []
+    prefixed: List[str] = []
+    raw_candidates: List[str] = []
+
     base = e164.strip()
     if not base:
-        return variants
+        return prefixed
 
-    def _append_variant(phone: str) -> None:
-        key = f"NUMBER#{phone}"
-        if key not in variants:
-            variants.append(key)
+    def _append_raw(candidate: str) -> None:
+        if candidate and candidate not in raw_candidates:
+            raw_candidates.append(candidate)
 
-    _append_variant(base)
+    _append_raw(base)
     if base.startswith("+"):
-        _append_variant(base[1:])
+        _append_raw(base[1:])
 
-    return variants
+    for candidate in raw_candidates:
+        prefixed_key = f"NUMBER#{candidate}"
+        if prefixed_key not in prefixed:
+            prefixed.append(prefixed_key)
+
+    for candidate in raw_candidates:
+        if candidate not in prefixed:
+            prefixed.append(candidate)
+
+    return prefixed
 
 
 def _rules_partition_key_variants(
@@ -371,10 +382,20 @@ class AssessChanges:
                         "has_name": bool(user_data_record.get("Name")),
                     },
                 )
-            if conversation_items:
-                payload["conversation_items"] = conversation_items
+            history_items: List[Dict[str, Any]] = []
+            if isinstance(conversation_items, list):
+                history_items = conversation_items
+            if (
+                history_items
+                or user_data_record is not None
+                or business_rules is not None
+            ):
+                payload["conversation_items"] = history_items
+                payload["conversation_history_count"] = len(history_items)
+
             if business_rules is not None:
                 payload["business_rules"] = business_rules
+            payload["business_rules_present"] = business_rules is not None
 
             llm_payload = self._build_llm_payload(
                 normalized_phone,
@@ -573,8 +594,8 @@ class AssessChanges:
                 if isinstance(value, (str, int, float, bool))
             }
 
+        recent: List[Dict[str, Any]] = []
         if conversation_items:
-            recent: List[Dict[str, Any]] = []
             for item in conversation_items[:5]:
                 if not isinstance(item, dict):
                     continue
@@ -591,12 +612,14 @@ class AssessChanges:
                         "whatsapp_id": str(item.get("whatsapp_id", "")),
                     }
                 )
-            if recent:
-                context["recent_history"] = recent
+        context["recent_history"] = recent
+        context["recent_history_count"] = len(recent)
 
-        if isinstance(business_rules, dict) and isinstance(
+        has_rules = isinstance(business_rules, dict) and isinstance(
             business_rules.get("rules_json"), dict
-        ):
+        )
+        context["has_business_rules"] = has_rules
+        if has_rules:
             context["business_rules"] = business_rules["rules_json"]
 
         return context

@@ -19,3 +19,13 @@ def test_assess_changes_returns_event_when_disabled():
     processor = module.AssessChanges(payload)
 
     assert processor.assess_and_apply() == payload
+
+
+def test_conversation_key_variants_match_history_schema():
+    module = _load_module()
+
+    variants = module._conversation_key_variants("+972502425777")
+
+    assert "NUMBER#972502425777" in variants
+    assert "NUMBER#+972502425777" in variants
+    assert "+972502425777" in variants
