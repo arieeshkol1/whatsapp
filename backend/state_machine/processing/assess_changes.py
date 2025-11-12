@@ -936,6 +936,9 @@ class AssessChanges:
             last_evaluated_key: Optional[Dict[str, Any]] = None
 
             while True:
+                if len(collected) >= history_limit:
+                    break
+
                 query_kwargs: Dict[str, Any] = {
                     "KeyConditionExpression": Key("PK").eq(partition_key)
                     & Key("SK").begins_with("MESSAGE#"),
