@@ -168,19 +168,29 @@ def _conversation_key_variants(e164: str) -> List[str]:
     """Return candidate partition keys for the conversation history table."""
 
     variants: List[str] = []
-    raw_candidates: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(value: Optional[str]) -> None:
+        if value and value not in seen:
+            variants.append(value)
+            seen.add(value)
 
     base = e164.strip()
     if not base:
         return prefixed
 
-    def _append_raw(candidate: str) -> None:
-        if candidate and candidate not in raw_candidates:
-            raw_candidates.append(candidate)
-
-    _append_raw(base)
+    raw_candidates: List[str] = [base]
     if base.startswith("+"):
-        _append_raw(base[1:])
+        raw_candidates.append(base[1:])
+
+    for candidate in raw_candidates:
+        prefixed = f"NUMBER#{candidate}"
+        _add(prefixed)
+        _add(f"{prefixed}\n")
+
+    for candidate in raw_candidates:
+        _add(candidate)
+        _add(f"{candidate}\n")
 
     def _append_variant(value: str) -> None:
         if value and value not in variants:
@@ -239,6 +249,26 @@ def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
         for candidate in _conversation_key_variants(trimmed):
             if candidate not in collected:
                 collected.append(candidate)
+
+    return collected
+
+
+def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
+    """Combine conversation key variants for the supplied phone numbers."""
+
+    collected: List[str] = []
+    seen: Set[str] = set()
+
+    for value in numbers:
+        if not isinstance(value, str):
+            continue
+        trimmed = value.strip()
+        if not trimmed:
+            continue
+        for candidate in _conversation_key_variants(trimmed):
+            if candidate not in seen:
+                collected.append(candidate)
+                seen.add(candidate)
 
     return collected
 
