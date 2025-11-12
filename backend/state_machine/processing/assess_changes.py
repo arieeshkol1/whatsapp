@@ -166,7 +166,8 @@ def _key_variants(e164: str) -> List[str]:
 
 def _conversation_key_variants(e164: str) -> List[str]:
     """Return candidate partition keys for the conversation history table."""
-    prefixed: List[str] = []
+
+    variants: List[str] = []
     raw_candidates: List[str] = []
 
     base = e164.strip()
@@ -181,6 +182,19 @@ def _conversation_key_variants(e164: str) -> List[str]:
     if base.startswith("+"):
         _append_raw(base[1:])
 
+    def _append_variant(value: str) -> None:
+        if value and value not in variants:
+            variants.append(value)
+
+    for candidate in raw_candidates:
+        prefixed = f"NUMBER#{candidate}"
+        _append_variant(prefixed)
+        _append_variant(f"{prefixed}\n")
+
+    for candidate in raw_candidates:
+        _append_variant(candidate)
+        _append_variant(f"{candidate}\n")
+
     for candidate in raw_candidates:
         prefixed_key = f"NUMBER#{candidate}"
         if prefixed_key not in prefixed:
@@ -191,6 +205,24 @@ def _conversation_key_variants(e164: str) -> List[str]:
             prefixed.append(candidate)
 
     return prefixed
+
+
+def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
+    """Combine conversation key variants for the supplied phone numbers."""
+
+    collected: List[str] = []
+
+    for value in numbers:
+        if not isinstance(value, str):
+            continue
+        trimmed = value.strip()
+        if not trimmed:
+            continue
+        for candidate in _conversation_key_variants(trimmed):
+            if candidate not in collected:
+                collected.append(candidate)
+
+    return collected
 
 
 def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
@@ -369,6 +401,7 @@ class AssessChanges:
             normalized_phone,
             conversation_id,
             phone_number,
+            phone_number_id,
             normalized_destination,
             destination_number,
         )

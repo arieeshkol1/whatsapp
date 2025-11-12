@@ -29,6 +29,8 @@ def test_conversation_key_variants_match_history_schema():
     assert "NUMBER#972502425777" in variants
     assert "NUMBER#+972502425777" in variants
     assert "+972502425777" in variants
+    assert "NUMBER#972502425777\n" in variants
+    assert "+972502425777\n" in variants
 
 
 def test_conversation_partition_keys_include_multiple_numbers():
@@ -37,6 +39,7 @@ def test_conversation_partition_keys_include_multiple_numbers():
     keys = module._conversation_partition_keys(
         "+972524347196",
         "972502649476",
+        "909607985563422",
         None,
         "   ",
     )
@@ -45,6 +48,7 @@ def test_conversation_partition_keys_include_multiple_numbers():
     assert "NUMBER#972524347196" in keys
     assert "NUMBER#972502649476" in keys
     assert "972502649476" in keys
+    assert "NUMBER#909607985563422" in keys
 
 
 def test_rules_partition_key_variants_cover_normalized_destination():
