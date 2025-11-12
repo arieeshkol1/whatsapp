@@ -213,3 +213,51 @@ def test_load_conversation_items_falls_back_to_recent_when_no_filtered_match():
     results = processor._load_conversation_items("+15551234567", 99)
 
     assert results and results[0]["text"] == "recent"
+
+
+def test_load_conversation_items_scan_fallback(monkeypatch):
+    monkeypatch.setenv("ASSESS_TOLERANT_SCAN", "true")
+    module = _load_module()
+
+    class FakeTable:
+        def query(self, **kwargs):
+            return {"Items": []}
+
+        def scan(self, **kwargs):
+            return {
+                "Items": [
+                    {
+                        "PK": {"S": "NUMBER#15551234567"},
+                        "SK": {"S": "MESSAGE#1"},
+                        "from_number": {"S": "15551234567"},
+                        "text": {"S": "scanned-newest"},
+                        "whatsapp_timestamp": {"N": "200"},
+                    },
+                    {
+                        "PK": {"S": "NUMBER#15551234567"},
+                        "SK": {"S": "MESSAGE#0"},
+                        "from_number": {"S": "15551234567"},
+                        "text": {"S": "scanned-oldest"},
+                        "whatsapp_timestamp": {"N": "100"},
+                    },
+                ]
+            }
+
+    class FakeDynamo:
+        def __init__(self, table):
+            self._table = table
+
+        def Table(self, name):
+            assert name == "history-table"
+            return self._table
+
+    table = FakeTable()
+
+    processor = module.AssessChanges({})
+    processor._conversation_table_name = "history-table"
+    processor._conversation_history_limit = 10
+    processor._dynamodb_resource = FakeDynamo(table)
+
+    results = processor._load_conversation_items("+15551234567", None, "15551234567")
+
+    assert [item["text"] for item in results] == ["scanned-newest", "scanned-oldest"]

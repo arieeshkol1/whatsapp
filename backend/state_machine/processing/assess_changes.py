@@ -177,11 +177,20 @@ def _conversation_key_variants(e164: str) -> List[str]:
 
     base = e164.strip()
     if not base:
-        return prefixed
+        return variants
 
     raw_candidates: List[str] = [base]
     if base.startswith("+"):
         raw_candidates.append(base[1:])
+
+    for candidate in raw_candidates:
+        prefixed = f"NUMBER#{candidate}"
+        _add(prefixed)
+        _add(f"{prefixed}\n")
+
+    for candidate in raw_candidates:
+        _add(candidate)
+        _add(f"{candidate}\n")
 
     for candidate in raw_candidates:
         prefixed = f"NUMBER#{candidate}"
@@ -249,6 +258,26 @@ def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
         for candidate in _conversation_key_variants(trimmed):
             if candidate not in collected:
                 collected.append(candidate)
+
+    return collected
+
+
+def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
+    """Combine conversation key variants for the supplied phone numbers."""
+
+    collected: List[str] = []
+    seen: Set[str] = set()
+
+    for value in numbers:
+        if not isinstance(value, str):
+            continue
+        trimmed = value.strip()
+        if not trimmed:
+            continue
+        for candidate in _conversation_key_variants(trimmed):
+            if candidate not in seen:
+                collected.append(candidate)
+                seen.add(candidate)
 
     return collected
 
@@ -985,6 +1014,11 @@ class AssessChanges:
             )
             return []
 
+        normalized_table = self._conversation_table_name.strip().lower()
+        tolerant_scan_allowed = _ENABLE_TOLERANT_SCAN or (
+            normalized_table in _DEV_HISTORY_TABLES
+        )
+
         prefer_filtered = conversation_id is not None and conversation_id > 0
 
         for partition_key in partition_keys:
@@ -1070,6 +1104,147 @@ class AssessChanges:
                 if collected:
                     # Always return newest-first up to history_limit (10)
                     return collected[:history_limit]
+
+        if tolerant_scan_allowed:
+            number_candidates: Set[str] = set()
+            pk_candidates: Set[str] = set()
+
+            def _ingest(value: Optional[str]) -> None:
+                if not isinstance(value, str):
+                    return
+                trimmed = value.strip()
+                if not trimmed:
+                    return
+                number_candidates.add(trimmed)
+
+                normalized_value = _normalize_phone(trimmed)
+                if normalized_value:
+                    number_candidates.add(normalized_value)
+                if trimmed.startswith("+"):
+                    number_candidates.add(trimmed[1:])
+                elif normalized_value and normalized_value.startswith("+"):
+                    number_candidates.add(normalized_value[1:])
+
+            _ingest(normalized_phone)
+            for extra in additional_numbers:
+                _ingest(extra)
+
+            for candidate in list(number_candidates):
+                pk_candidates.add(candidate)
+                pk_candidates.add(f"{candidate}\n")
+                pk_candidates.add(f"NUMBER#{candidate}")
+                pk_candidates.add(f"NUMBER#{candidate}\n")
+
+            filter_expr = None
+
+            for candidate in pk_candidates:
+                expr = Attr("PK").eq(candidate)
+                filter_expr = expr if filter_expr is None else filter_expr | expr
+
+            for candidate in number_candidates:
+                expr = Attr("from_number").eq(candidate) | Attr("to_number").eq(
+                    candidate
+                )
+                filter_expr = expr if filter_expr is None else filter_expr | expr
+
+            if filter_expr is None:
+                return []
+
+            collected: List[Dict[str, Any]] = []
+            last_evaluated_key: Optional[Dict[str, Any]] = None
+            scan_limit = max(history_limit * 5, 50)
+
+            while True:
+                scan_kwargs: Dict[str, Any] = {
+                    "FilterExpression": filter_expr,
+                    "Limit": scan_limit,
+                }
+                if last_evaluated_key:
+                    scan_kwargs["ExclusiveStartKey"] = last_evaluated_key
+
+                try:
+                    response = table.scan(**scan_kwargs)
+                except (ClientError, BotoCoreError):
+                    self.logger.exception(
+                        "Failed to scan conversation items",
+                        extra={
+                            "table": self._conversation_table_name,
+                            "numbers": sorted(number_candidates),
+                        },
+                    )
+                    collected = []
+                    break
+                except Exception:  # pragma: no cover
+                    self.logger.exception(
+                        "Unexpected error scanning conversation items",
+                        extra={
+                            "table": self._conversation_table_name,
+                            "numbers": sorted(number_candidates),
+                        },
+                    )
+                    collected = []
+                    break
+
+                items = response.get("Items") if isinstance(response, dict) else None
+                if isinstance(items, list) and items:
+                    for raw_item in items:
+                        if not isinstance(raw_item, dict):
+                            continue
+                        collected.append(
+                            {
+                                key: _unwrap_attribute(value)
+                                for key, value in raw_item.items()
+                            }
+                        )
+                        if len(collected) >= history_limit:
+                            break
+
+                    if len(collected) >= history_limit:
+                        break
+
+                last_evaluated_key = (
+                    response.get("LastEvaluatedKey")
+                    if isinstance(response, dict)
+                    else None
+                )
+                if not last_evaluated_key:
+                    break
+
+            if collected:
+                deduped: List[Dict[str, Any]] = []
+                seen_ids: Set[Any] = set()
+
+                for item in collected:
+                    identifier: Any = item.get("whatsapp_id") or (
+                        item.get("PK"),
+                        item.get("SK"),
+                    )
+                    if identifier in seen_ids:
+                        continue
+                    seen_ids.add(identifier)
+                    deduped.append(item)
+
+                def _history_sort_key(entry: Dict[str, Any]) -> Any:
+                    timestamp = entry.get("whatsapp_timestamp")
+                    if isinstance(timestamp, (int, float)):
+                        return (0, float(timestamp))
+                    if isinstance(timestamp, str):
+                        try:
+                            return (0, float(timestamp))
+                        except ValueError:
+                            digits = "".join(ch for ch in timestamp if ch.isdigit())
+                            if digits:
+                                try:
+                                    return (0, float(digits))
+                                except ValueError:
+                                    pass
+                    created = entry.get("created_at")
+                    if isinstance(created, str):
+                        return (1, created)
+                    return (2, "")
+
+                deduped.sort(key=_history_sort_key, reverse=True)
+                return deduped[:history_limit]
 
         return []
 
