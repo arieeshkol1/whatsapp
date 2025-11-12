@@ -37,6 +37,7 @@ logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
 _DEFAULT_HISTORY_LIMIT = 50
 _DEV_HISTORY_LIMIT = 10
+_MAX_RECENT_HISTORY = 10
 _DEV_HISTORY_TABLES: Set[str] = {"aws-wpp-dev"}
 try:
     _MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
@@ -125,6 +126,7 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     trimmed = str(number).strip()
     if not trimmed:
         return None
+    digits = "".join(ch for ch in trimmed if ch.isdigit())
     if trimmed.startswith("+"):
         return f"+{digits}"
 
@@ -162,21 +164,49 @@ def _key_variants(e164: str) -> List[str]:
 
 def _conversation_key_variants(e164: str) -> List[str]:
     """Return candidate partition keys for the conversation history table."""
-    variants: List[str] = []
+    prefixed: List[str] = []
+    raw_candidates: List[str] = []
+
     base = e164.strip()
     if not base:
-        return variants
+        return prefixed
 
-    def _append_variant(phone: str) -> None:
-        key = f"NUMBER#{phone}"
-        if key not in variants:
-            variants.append(key)
+    def _append_raw(candidate: str) -> None:
+        if candidate and candidate not in raw_candidates:
+            raw_candidates.append(candidate)
 
-    _append_variant(base)
+    _append_raw(base)
     if base.startswith("+"):
-        _append_variant(base[1:])
+        _append_raw(base[1:])
 
-    return variants
+    for candidate in raw_candidates:
+        prefixed_key = f"NUMBER#{candidate}"
+        if prefixed_key not in prefixed:
+            prefixed.append(prefixed_key)
+
+    for candidate in raw_candidates:
+        if candidate not in prefixed:
+            prefixed.append(candidate)
+
+    return prefixed
+
+
+def _conversation_partition_keys(*numbers: Optional[str]) -> List[str]:
+    """Combine conversation key variants for the supplied phone numbers."""
+
+    collected: List[str] = []
+
+    for value in numbers:
+        if not isinstance(value, str):
+            continue
+        trimmed = value.strip()
+        if not trimmed:
+            continue
+        for candidate in _conversation_key_variants(trimmed):
+            if candidate not in collected:
+                collected.append(candidate)
+
+    return collected
 
 
 def _rules_partition_key_variants(
@@ -193,20 +223,25 @@ def _rules_partition_key_variants(
         raw_ruleset = str(explicit_ruleset_id).strip()
         if raw_ruleset:
             _add(raw_ruleset)
+            _add(f"{raw_ruleset}\n")
 
     if number:
         raw = str(number).strip()
         if raw:
             _add(raw)
+            _add(f"{raw}\n")
 
             normalized = _normalize_phone(raw)
             if normalized:
                 _add(normalized)
+                _add(f"{normalized}\n")
                 if normalized.startswith("+"):
                     _add(normalized[1:])
+                    _add(f"{normalized[1:]}\n")
 
             if raw.startswith("+"):
                 _add(raw[1:])
+                _add(f"{raw[1:]}\n")
 
     # Ensure RULESET# prefixed variants are included for compatibility with the
     # dedicated rules_config helper and the table schema defined in the CDK.
@@ -322,15 +357,23 @@ class AssessChanges:
             return self.event
 
         user_data_record = self._load_user_data(normalized_phone)
-        conversation_id = self._extract_conversation_id(self.event)
-        conversation_items = self._load_conversation_items(
-            normalized_phone, conversation_id
-        )
         destination_number = self._extract_to_number(self.event)
         normalized_destination = _normalize_phone(destination_number)
         if not normalized_destination and destination_number:
             normalized_destination = destination_number
-        business_rules = self._load_business_rules(destination_number)
+        phone_number_id = self._extract_phone_number_id(self.event)
+        conversation_id = self._extract_conversation_id(self.event)
+        conversation_items = self._load_conversation_items(
+            normalized_phone,
+            conversation_id,
+            normalized_destination,
+            destination_number,
+        )
+        business_rules = self._load_business_rules(
+            normalized_destination,
+            destination_number,
+            phone_number_id,
+        )
 
         if (
             user_data_record is not None
@@ -371,14 +414,25 @@ class AssessChanges:
                         "has_name": bool(user_data_record.get("Name")),
                     },
                 )
-            if conversation_items:
-                payload["conversation_items"] = conversation_items
+            history_items: List[Dict[str, Any]] = []
+            if isinstance(conversation_items, list):
+                history_items = conversation_items
+            if (
+                history_items
+                or user_data_record is not None
+                or business_rules is not None
+            ):
+                payload["conversation_items"] = history_items
+                payload["conversation_history_count"] = len(history_items)
+
             if business_rules is not None:
                 payload["business_rules"] = business_rules
+            payload["business_rules_present"] = business_rules is not None
 
             llm_payload = self._build_llm_payload(
                 normalized_phone,
                 normalized_destination,
+                phone_number_id,
                 conversation_id,
                 user_data_record,
                 conversation_items,
@@ -508,6 +562,34 @@ class AssessChanges:
         return None
 
     # ------------------------------------------------------------------
+    def _extract_phone_number_id(self, event: Dict[str, Any]) -> Optional[str]:
+        """Retrieve the WhatsApp phone_number_id when present."""
+        if not isinstance(event, dict):
+            return None
+
+        direct = event.get("phone_number_id")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+
+        raw_event = event.get("raw_event")
+        if isinstance(raw_event, dict):
+            candidate = raw_event.get("phone_number_id")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+
+        input_event = event.get("input")
+        if isinstance(input_event, dict):
+            candidate = input_event.get("phone_number_id")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+
+        original_event = event.get("original_event")
+        if isinstance(original_event, dict):
+            return self._extract_phone_number_id(original_event)
+
+        return None
+
+    # ------------------------------------------------------------------
     def _extract_message_text(self, event: Dict[str, Any]) -> Optional[str]:
         if not isinstance(event, dict):
             return None
@@ -552,6 +634,7 @@ class AssessChanges:
         self,
         normalized_phone: str,
         destination_number: Optional[str],
+        phone_number_id: Optional[str],
         conversation_id: Optional[int],
         user_data: Optional[Dict[str, Any]],
         conversation_items: List[Dict[str, Any]],
@@ -563,6 +646,9 @@ class AssessChanges:
         if destination_number:
             context["business_number"] = destination_number
 
+        if phone_number_id:
+            context["phone_number_id"] = phone_number_id
+
         if conversation_id and conversation_id > 0:
             context["conversation_id"] = conversation_id
 
@@ -573,9 +659,9 @@ class AssessChanges:
                 if isinstance(value, (str, int, float, bool))
             }
 
+        recent: List[Dict[str, Any]] = []
         if conversation_items:
-            recent: List[Dict[str, Any]] = []
-            for item in conversation_items[:5]:
+            for item in conversation_items[:_MAX_RECENT_HISTORY]:
                 if not isinstance(item, dict):
                     continue
                 recent.append(
@@ -591,12 +677,14 @@ class AssessChanges:
                         "whatsapp_id": str(item.get("whatsapp_id", "")),
                     }
                 )
-            if recent:
-                context["recent_history"] = recent
+        context["recent_history"] = recent
+        context["recent_history_count"] = len(recent)
 
-        if isinstance(business_rules, dict) and isinstance(
+        has_rules = isinstance(business_rules, dict) and isinstance(
             business_rules.get("rules_json"), dict
-        ):
+        )
+        context["has_business_rules"] = has_rules
+        if has_rules:
             context["business_rules"] = business_rules["rules_json"]
 
         return context
@@ -625,6 +713,7 @@ class AssessChanges:
         self,
         normalized_phone: str,
         destination_number: Optional[str],
+        phone_number_id: Optional[str],
         conversation_id: Optional[int],
         user_data: Optional[Dict[str, Any]],
         conversation_items: List[Dict[str, Any]],
@@ -638,6 +727,7 @@ class AssessChanges:
         prior_context = self._build_prior_context(
             normalized_phone,
             destination_number,
+            phone_number_id,
             conversation_id,
             user_data,
             conversation_items,
@@ -795,7 +885,10 @@ class AssessChanges:
 
     # ------------------------------------------------------------------
     def _load_conversation_items(
-        self, normalized_phone: str, conversation_id: Optional[int]
+        self,
+        normalized_phone: Optional[str],
+        conversation_id: Optional[int],
+        *additional_numbers: Optional[str],
     ) -> List[Dict[str, Any]]:
         if not self._conversation_table_name:
             return []
@@ -804,9 +897,17 @@ class AssessChanges:
         if dynamodb is None:
             return []
 
-        partition_keys = _conversation_key_variants(normalized_phone)
+        partition_keys = _conversation_partition_keys(
+            normalized_phone, *additional_numbers
+        )
         if not partition_keys:
             return []
+
+        history_limit = self._conversation_history_limit
+        if history_limit <= 0:
+            return []
+        if history_limit > _MAX_RECENT_HISTORY:
+            history_limit = _MAX_RECENT_HISTORY
 
         try:
             table = dynamodb.Table(self._conversation_table_name)
@@ -819,18 +920,15 @@ class AssessChanges:
 
         for partition_key in partition_keys:
             collected: List[Dict[str, Any]] = []
+            matches: List[Dict[str, Any]] = []
             last_evaluated_key: Optional[Dict[str, Any]] = None
 
             while True:
                 query_kwargs: Dict[str, Any] = {
                     "KeyConditionExpression": Key("PK").eq(partition_key),
                     "ScanIndexForward": False,
-                    "Limit": self._conversation_history_limit,
+                    "Limit": history_limit,
                 }
-                if conversation_id is not None and conversation_id > 0:
-                    query_kwargs["FilterExpression"] = Attr("conversation_id").eq(
-                        conversation_id
-                    )
                 if last_evaluated_key:
                     query_kwargs["ExclusiveStartKey"] = last_evaluated_key
 
@@ -845,6 +943,7 @@ class AssessChanges:
                         },
                     )
                     collected = []
+                    matches = []
                     break
                 except Exception:  # pragma: no cover
                     self.logger.exception(
@@ -855,12 +954,36 @@ class AssessChanges:
                         },
                     )
                     collected = []
+                    matches = []
                     break
 
                 items = response.get("Items") if isinstance(response, dict) else None
                 if isinstance(items, list) and items:
-                    collected.extend(items)
-                    if len(collected) >= self._conversation_history_limit:
+                    for raw_item in items:
+                        if not isinstance(raw_item, dict):
+                            continue
+                        item = {
+                            key: _unwrap_attribute(value)
+                            for key, value in raw_item.items()
+                        }
+                        collected.append(item)
+                        if (
+                            conversation_id is not None
+                            and conversation_id > 0
+                            and _coerce_int(item.get("conversation_id"))
+                            == conversation_id
+                        ):
+                            matches.append(item)
+
+                    if (conversation_id is None or conversation_id <= 0) and len(
+                        collected
+                    ) >= history_limit:
+                        break
+                    if (
+                        conversation_id is not None
+                        and conversation_id > 0
+                        and len(matches) >= history_limit
+                    ):
                         break
 
                 last_evaluated_key = (
@@ -871,28 +994,18 @@ class AssessChanges:
                 if not last_evaluated_key:
                     break
 
+            if matches:
+                return matches[:history_limit]
             if collected:
-                sliced = collected[: self._conversation_history_limit]
-                normalized: List[Dict[str, Any]] = []
-                for item in sliced:
-                    if isinstance(item, dict):
-                        normalized.append(
-                            {
-                                key: _unwrap_attribute(value)
-                                for key, value in item.items()
-                            }
-                        )
-                if normalized:
-                    return normalized
-                return sliced
+                return collected[:history_limit]
 
         return []
 
     # ------------------------------------------------------------------
     def _load_business_rules(
-        self, to_number: Optional[str]
+        self, *identifiers: Optional[str]
     ) -> Optional[Dict[str, Any]]:
-        if not self._rules_table_name or not to_number:
+        if not self._rules_table_name:
             return None
 
         dynamodb = self._get_dynamodb_resource()
@@ -908,7 +1021,23 @@ class AssessChanges:
             )
             return None
 
-        key_variants = _rules_partition_key_variants(to_number, self._ruleset_id)
+        key_variants: List[str] = []
+
+        explicit_variants = _rules_partition_key_variants(None, self._ruleset_id)
+        for candidate in explicit_variants:
+            if candidate not in key_variants:
+                key_variants.append(candidate)
+
+        for identifier in identifiers:
+            if not isinstance(identifier, str):
+                continue
+            trimmed = identifier.strip()
+            if not trimmed:
+                continue
+            for candidate in _rules_partition_key_variants(trimmed, None):
+                if candidate not in key_variants:
+                    key_variants.append(candidate)
+
         if not key_variants:
             return None
 
