@@ -125,6 +125,7 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     trimmed = str(number).strip()
     if not trimmed:
         return None
+    digits = "".join(ch for ch in trimmed if ch.isdigit())
     if trimmed.startswith("+"):
         return f"+{digits}"
 
