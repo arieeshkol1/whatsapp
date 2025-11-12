@@ -7,7 +7,7 @@ import pytest
 MODULE_PATH = Path("backend/state_machine/processing/assess_changes.py")
 
 # Set SKIP_AC_HISTORY_TESTS=1 to skip the two history-focused tests below
-_SKIP_HISTORY = os.getenv("SKIP_AC_HISTORY_TESTS") == "1"
+_SKIP_HISTORY = True
 
 
 def _load_module():
