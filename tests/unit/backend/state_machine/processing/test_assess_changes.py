@@ -102,3 +102,110 @@ def test_prior_context_limits_recent_history_to_maximum():
     assert context["recent_history"][-1]["text"] == (
         f"message-{module._MAX_RECENT_HISTORY - 1}"
     )
+
+
+def test_load_conversation_items_prefers_filtered_matches():
+    module = _load_module()
+
+    class FakeTable:
+        def __init__(self, responses):
+            self._responses = {key: list(value) for key, value in responses.items()}
+
+        def query(self, **kwargs):
+            expr = kwargs.get("KeyConditionExpression")
+            partition_key = None
+            if expr is not None and hasattr(expr, "_values"):
+                _, partition_key = expr._values
+            use_filter = "FilterExpression" in kwargs
+            bucket = self._responses.get((partition_key, use_filter), [])
+            if bucket:
+                return bucket.pop(0)
+            return {"Items": []}
+
+    class FakeDynamo:
+        def __init__(self, table):
+            self._table = table
+
+        def Table(self, name):
+            assert name == "history-table"
+            return self._table
+
+    table = FakeTable(
+        {
+            ("NUMBER#+15551234567", True): [{"Items": []}],
+            ("NUMBER#15551234567", True): [
+                {
+                    "Items": [
+                        {
+                            "conversation_id": "7",
+                            "text": "matched",
+                            "from_number": "15551234567",
+                        }
+                    ]
+                }
+            ],
+        }
+    )
+
+    processor = module.AssessChanges({})
+    processor._conversation_table_name = "history-table"
+    processor._conversation_history_limit = 10
+    processor._dynamodb_resource = FakeDynamo(table)
+
+    results = processor._load_conversation_items("+15551234567", 7)
+
+    assert results and results[0]["text"] == "matched"
+
+
+def test_load_conversation_items_falls_back_to_recent_when_no_filtered_match():
+    module = _load_module()
+
+    class FakeTable:
+        def __init__(self, responses):
+            self._responses = {key: list(value) for key, value in responses.items()}
+
+        def query(self, **kwargs):
+            expr = kwargs.get("KeyConditionExpression")
+            partition_key = None
+            if expr is not None and hasattr(expr, "_values"):
+                _, partition_key = expr._values
+            use_filter = "FilterExpression" in kwargs
+            bucket = self._responses.get((partition_key, use_filter), [])
+            if bucket:
+                return bucket.pop(0)
+            return {"Items": []}
+
+    class FakeDynamo:
+        def __init__(self, table):
+            self._table = table
+
+        def Table(self, name):
+            assert name == "history-table"
+            return self._table
+
+    table = FakeTable(
+        {
+            ("NUMBER#+15551234567", True): [{"Items": []}],
+            ("NUMBER#15551234567", True): [{"Items": []}],
+            ("NUMBER#15551234567", False): [
+                {
+                    "Items": [
+                        {
+                            "conversation_id": "3",
+                            "text": "recent",
+                            "from_number": "15551234567",
+                        }
+                    ]
+                }
+            ],
+        }
+    )
+
+    processor = module.AssessChanges({})
+    processor._conversation_table_name = "history-table"
+    processor._conversation_history_limit = 10
+    processor._dynamodb_resource = FakeDynamo(table)
+
+    results = processor._load_conversation_items("+15551234567", 99)
+
+    assert results and results[0]["text"] == "recent"

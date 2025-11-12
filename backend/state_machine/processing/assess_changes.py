@@ -918,86 +918,84 @@ class AssessChanges:
             )
             return []
 
+        prefer_filtered = conversation_id is not None and conversation_id > 0
+
         for partition_key in partition_keys:
-            collected: List[Dict[str, Any]] = []
-            matches: List[Dict[str, Any]] = []
-            last_evaluated_key: Optional[Dict[str, Any]] = None
+            attempts = (True, False) if prefer_filtered else (False,)
 
-            while len(collected) < history_limit:
-                query_kwargs: Dict[str, Any] = {
-                    "KeyConditionExpression": Key("PK").eq(partition_key),
-                    "ScanIndexForward": False,
-                    "Limit": history_limit,
-                }
-                if last_evaluated_key:
-                    query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+            for use_filter in attempts:
+                collected: List[Dict[str, Any]] = []
+                last_evaluated_key: Optional[Dict[str, Any]] = None
 
-                try:
-                    response = table.query(**query_kwargs)
-                except (ClientError, BotoCoreError):
-                    self.logger.exception(
-                        "Failed to query conversation items",
-                        extra={
-                            "table": self._conversation_table_name,
-                            "pk": partition_key,
-                        },
-                    )
-                    collected = []
-                    matches = []
-                    break
-                except Exception:  # pragma: no cover
-                    self.logger.exception(
-                        "Unexpected error querying conversation items",
-                        extra={
-                            "table": self._conversation_table_name,
-                            "pk": partition_key,
-                        },
-                    )
-                    collected = []
-                    matches = []
-                    break
+                while True:
+                    query_kwargs: Dict[str, Any] = {
+                        "KeyConditionExpression": Key("PK").eq(partition_key),
+                        "ScanIndexForward": False,
+                        "Limit": history_limit,
+                    }
+                    if use_filter and prefer_filtered:
+                        query_kwargs["FilterExpression"] = Attr("conversation_id").eq(
+                            conversation_id
+                        )
+                    if last_evaluated_key:
+                        query_kwargs["ExclusiveStartKey"] = last_evaluated_key
 
-                items = response.get("Items") if isinstance(response, dict) else None
-                if isinstance(items, list) and items:
-                    for raw_item in items:
-                        if not isinstance(raw_item, dict):
-                            continue
-                        item = {
-                            key: _unwrap_attribute(value)
-                            for key, value in raw_item.items()
-                        }
-                        collected.append(item)
-                        if (
-                            conversation_id is not None
-                            and conversation_id > 0
-                            and _coerce_int(item.get("conversation_id"))
-                            == conversation_id
-                        ):
-                            matches.append(item)
-
-                    if (conversation_id is None or conversation_id <= 0) and len(
-                        collected
-                    ) >= history_limit:
+                    try:
+                        response = table.query(**query_kwargs)
+                    except (ClientError, BotoCoreError):
+                        self.logger.exception(
+                            "Failed to query conversation items",
+                            extra={
+                                "table": self._conversation_table_name,
+                                "pk": partition_key,
+                                "filtered": use_filter,
+                            },
+                        )
+                        collected = []
                         break
-                    if (
-                        conversation_id is not None
-                        and conversation_id > 0
-                        and len(matches) >= history_limit
-                    ):
+                    except Exception:  # pragma: no cover
+                        self.logger.exception(
+                            "Unexpected error querying conversation items",
+                            extra={
+                                "table": self._conversation_table_name,
+                                "pk": partition_key,
+                                "filtered": use_filter,
+                            },
+                        )
+                        collected = []
                         break
 
-                last_evaluated_key = (
-                    response.get("LastEvaluatedKey")
-                    if isinstance(response, dict)
-                    else None
-                )
-                if not last_evaluated_key:
-                    break
+                    items = (
+                        response.get("Items") if isinstance(response, dict) else None
+                    )
+                    if isinstance(items, list) and items:
+                        for raw_item in items:
+                            if not isinstance(raw_item, dict):
+                                continue
+                            collected.append(
+                                {
+                                    key: _unwrap_attribute(value)
+                                    for key, value in raw_item.items()
+                                }
+                            )
+                            if len(collected) >= history_limit:
+                                break
 
-            if matches:
-                return matches[:history_limit]
-            if collected:
-                return collected[:history_limit]
+                        if len(collected) >= history_limit:
+                            break
+
+                    last_evaluated_key = (
+                        response.get("LastEvaluatedKey")
+                        if isinstance(response, dict)
+                        else None
+                    )
+                    if not last_evaluated_key:
+                        break
+
+                if collected:
+                    if len(collected) > history_limit:
+                        collected = collected[:history_limit]
+                    return collected
 
         return []
 
