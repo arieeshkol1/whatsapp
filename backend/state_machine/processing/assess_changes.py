@@ -923,7 +923,7 @@ class AssessChanges:
             matches: List[Dict[str, Any]] = []
             last_evaluated_key: Optional[Dict[str, Any]] = None
 
-            while True:
+            while len(collected) < history_limit:
                 query_kwargs: Dict[str, Any] = {
                     "KeyConditionExpression": Key("PK").eq(partition_key),
                     "ScanIndexForward": False,
