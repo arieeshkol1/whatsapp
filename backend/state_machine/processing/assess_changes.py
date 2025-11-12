@@ -375,7 +375,11 @@ class AssessChanges:
             history_items: List[Dict[str, Any]] = []
             if isinstance(conversation_items, list):
                 history_items = conversation_items
-            if history_items or user_data_record is not None or business_rules is not None:
+            if (
+                history_items
+                or user_data_record is not None
+                or business_rules is not None
+            ):
                 payload["conversation_items"] = history_items
                 payload["conversation_history_count"] = len(history_items)
 
@@ -601,9 +605,8 @@ class AssessChanges:
         context["recent_history"] = recent
         context["recent_history_count"] = len(recent)
 
-        has_rules = (
-            isinstance(business_rules, dict)
-            and isinstance(business_rules.get("rules_json"), dict)
+        has_rules = isinstance(business_rules, dict) and isinstance(
+            business_rules.get("rules_json"), dict
         )
         context["has_business_rules"] = has_rules
         if has_rules:
