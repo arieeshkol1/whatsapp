@@ -920,6 +920,7 @@ class AssessChanges:
 
         for partition_key in partition_keys:
             collected: List[Dict[str, Any]] = []
+            matches: List[Dict[str, Any]] = []
             last_evaluated_key: Optional[Dict[str, Any]] = None
 
             while len(collected) < history_limit:
@@ -942,6 +943,7 @@ class AssessChanges:
                         },
                     )
                     collected = []
+                    matches = []
                     break
                 except Exception:  # pragma: no cover
                     self.logger.exception(
@@ -952,14 +954,37 @@ class AssessChanges:
                         },
                     )
                     collected = []
+                    matches = []
                     break
 
                 items = response.get("Items") if isinstance(response, dict) else None
                 if isinstance(items, list) and items:
-                    collected.extend(
-                        item for item in items if isinstance(item, dict)
-                    )
-                    if len(collected) >= history_limit:
+                    for raw_item in items:
+                        if not isinstance(raw_item, dict):
+                            continue
+                        item = {
+                            key: _unwrap_attribute(value)
+                            for key, value in raw_item.items()
+                        }
+                        collected.append(item)
+                        if (
+                            conversation_id is not None
+                            and conversation_id > 0
+                            and _coerce_int(item.get("conversation_id"))
+                            == conversation_id
+                        ):
+                            matches.append(item)
+
+                    if (
+                        conversation_id is None
+                        or conversation_id <= 0
+                    ) and len(collected) >= history_limit:
+                        break
+                    if (
+                        conversation_id is not None
+                        and conversation_id > 0
+                        and len(matches) >= history_limit
+                    ):
                         break
 
                 last_evaluated_key = (
@@ -970,28 +995,10 @@ class AssessChanges:
                 if not last_evaluated_key:
                     break
 
+            if matches:
+                return matches[:history_limit]
             if collected:
-                sliced = collected[:history_limit]
-                normalized: List[Dict[str, Any]] = [
-                    {
-                        key: _unwrap_attribute(value)
-                        for key, value in item.items()
-                    }
-                    for item in sliced
-                ]
-
-                selected: List[Dict[str, Any]] = normalized
-                if conversation_id is not None and conversation_id > 0:
-                    filtered: List[Dict[str, Any]] = []
-                    for item in normalized:
-                        conv_value = _coerce_int(item.get("conversation_id"))
-                        if conv_value == conversation_id:
-                            filtered.append(item)
-                    if filtered:
-                        selected = filtered[:history_limit]
-
-                if selected:
-                    return selected[:history_limit]
+                return collected[:history_limit]
 
         return []
 
