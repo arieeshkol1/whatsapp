@@ -6,7 +6,6 @@ retrieves additional context for the current phone number from multiple sources:
 * The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
 * The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
 * The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars).
-* A ready-to-send Bedrock request payload for downstream smart-agent orchestration.
 
 The resulting payload is appended to the event so the downstream
 "ProcessText" step can use it without re-querying DynamoDB.
@@ -115,18 +114,17 @@ def _coerce_int(value: Any) -> Optional[int]:
 
 
 def _normalize_phone(number: Optional[str]) -> Optional[str]:
-    """Normalise a phone number, enforcing an E.164 prefix when possible."""
+    """Normalize a phone number to E.164 conservatively.
+
+    - If already starts with '+', return as-is (stripped).
+    - If digits >= _MIN_INTL_DIGITS, assume it's an international number and prefix '+'.
+    - Otherwise return the trimmed input to avoid making a bad E.164.
+    """
     if not number:
         return None
-
     trimmed = str(number).strip()
     if not trimmed:
         return None
-
-    digits = "".join(ch for ch in trimmed if ch.isdigit())
-    if not digits:
-        return trimmed if trimmed.startswith("+") else None
-
     if trimmed.startswith("+"):
         return f"+{digits}"
 
@@ -140,8 +138,7 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
 
     if len(digits) >= min_intl_digits:
         return f"+{digits}"
-
-    return digits
+    return trimmed
 
 
 def _key_variants(e164: str) -> List[str]:
