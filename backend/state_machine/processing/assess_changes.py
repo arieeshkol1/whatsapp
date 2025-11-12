@@ -163,21 +163,31 @@ def _key_variants(e164: str) -> List[str]:
 
 def _conversation_key_variants(e164: str) -> List[str]:
     """Return candidate partition keys for the conversation history table."""
-    variants: List[str] = []
+    prefixed: List[str] = []
+    raw_candidates: List[str] = []
+
     base = e164.strip()
     if not base:
-        return variants
+        return prefixed
 
-    def _append_variant(phone: str) -> None:
-        key = f"NUMBER#{phone}"
-        if key not in variants:
-            variants.append(key)
+    def _append_raw(candidate: str) -> None:
+        if candidate and candidate not in raw_candidates:
+            raw_candidates.append(candidate)
 
-    _append_variant(base)
+    _append_raw(base)
     if base.startswith("+"):
-        _append_variant(base[1:])
+        _append_raw(base[1:])
 
-    return variants
+    for candidate in raw_candidates:
+        prefixed_key = f"NUMBER#{candidate}"
+        if prefixed_key not in prefixed:
+            prefixed.append(prefixed_key)
+
+    for candidate in raw_candidates:
+        if candidate not in prefixed:
+            prefixed.append(candidate)
+
+    return prefixed
 
 
 def _rules_partition_key_variants(
