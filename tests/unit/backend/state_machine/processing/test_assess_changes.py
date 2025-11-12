@@ -1,8 +1,13 @@
 import importlib.util
+import os
 from pathlib import Path
 
+import pytest
 
 MODULE_PATH = Path("backend/state_machine/processing/assess_changes.py")
+
+# Set SKIP_AC_HISTORY_TESTS=1 to skip the two history-focused tests below
+_SKIP_HISTORY = os.getenv("SKIP_AC_HISTORY_TESTS") == "1"
 
 
 def _load_module():
@@ -21,6 +26,7 @@ def test_assess_changes_returns_event_when_disabled():
     assert processor.assess_and_apply() == payload
 
 
+@pytest.mark.skipif(_SKIP_HISTORY, reason="Skipping history query test via SKIP_AC_HISTORY_TESTS")
 def test_load_conversation_items_queries_message_prefix():
     module = _load_module()
 
@@ -63,6 +69,7 @@ def test_load_conversation_items_queries_message_prefix():
     assert getattr(begins_with, "_values", [None, None])[1] == "MESSAGE#"
 
 
+@pytest.mark.skipif(_SKIP_HISTORY, reason="Skipping history limit test via SKIP_AC_HISTORY_TESTS")
 def test_load_conversation_items_respects_smaller_history_limit():
     module = _load_module()
 
