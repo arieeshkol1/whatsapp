@@ -70,8 +70,7 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Run Unit Tests
-        run: poetry run poe black-check
-
+        run: poetry run poe test-unit
 
       - name: Archive code coverage results
         uses: actions/upload-artifact@v4
