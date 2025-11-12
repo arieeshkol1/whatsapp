@@ -1,8 +1,6 @@
 import importlib.util
-import os
 from pathlib import Path
 
-import pytest
 
 MODULE_PATH = Path("backend/state_machine/processing/assess_changes.py")
 
@@ -23,7 +21,6 @@ def test_assess_changes_returns_event_when_disabled():
     assert processor.assess_and_apply() == payload
 
 
-@pytest.mark.skip(reason="Temporarily disabled while refactoring _load_conversation_items")
 def test_load_conversation_items_queries_message_prefix():
     module = _load_module()
 
@@ -66,7 +63,6 @@ def test_load_conversation_items_queries_message_prefix():
     assert getattr(begins_with, "_values", [None, None])[1] == "MESSAGE#"
 
 
-@pytest.mark.skip(reason="Temporarily disabled while refactoring _load_conversation_items")
 def test_load_conversation_items_respects_smaller_history_limit():
     module = _load_module()
 
