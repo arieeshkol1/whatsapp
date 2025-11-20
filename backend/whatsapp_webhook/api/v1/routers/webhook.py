@@ -150,7 +150,9 @@ async def post_chatbot_webhook(
 
         # Save the message to DynamoDB
         if message_item:
-            result = dynamodb_helper.put_item(message_item.model_dump())
+            result = dynamodb_helper.put_item(
+                message_item.model_dump(exclude_none=True)
+            )
             logger.debug(result, message_details="DynamoDB put_item() result")
 
             metadata = (

@@ -1,4 +1,7 @@
-from common.models.message_base_model import MessageBaseModel
+from common.models.message_base_model import (
+    MessageBaseModel,
+    _deserialize_attribute,
+)
 
 
 class TextMessageModel(MessageBaseModel):
@@ -37,4 +40,8 @@ class TextMessageModel(MessageBaseModel):
             conversation_id=int(
                 dynamodb_item.get("conversation_id", {}).get("N", "1") or 1
             ),
+            system_response=_deserialize_attribute(
+                dynamodb_item.get("system_response")
+            ),
+            Response=_deserialize_attribute(dynamodb_item.get("Response")),
         )

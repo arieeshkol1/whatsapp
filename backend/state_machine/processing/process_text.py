@@ -688,6 +688,7 @@ class ProcessText(BaseStepFunction):
         profile_updates: Dict[str, Any] = {}
         conversation_tag_updates: Dict[str, Any] = {}
         user_update_entries: List[Dict[str, Any]] = []
+        bedrock_response_json: Optional[Dict[str, Any]] = None
 
         if raw_response:
             try:
@@ -699,6 +700,7 @@ class ProcessText(BaseStepFunction):
                 )
             else:
                 if isinstance(parsed, dict):
+                    bedrock_response_json = parsed
                     candidate_reply = parsed.get("reply")
                     if isinstance(candidate_reply, str):
                         reply_text = candidate_reply
@@ -761,7 +763,10 @@ class ProcessText(BaseStepFunction):
         if _history_helper and current_whatsapp_id:
             try:
                 _history_helper.update_system_response(
-                    partition_keys, current_whatsapp_id, system_response
+                    partition_keys,
+                    current_whatsapp_id,
+                    system_response,
+                    bedrock_response_json,
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to attach system response to history item")
@@ -784,6 +789,8 @@ class ProcessText(BaseStepFunction):
             self.event["order_progress_summary"] = final_order_progress_summary
         self.event["conversation_state"] = conversation_state
         self.event["system_response"] = system_response
+        if bedrock_response_json:
+            self.event["bedrock_response"] = bedrock_response_json
         if user_update_entries:
             self.event["user_updates"] = user_update_entries
 

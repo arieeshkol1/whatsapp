@@ -43,7 +43,7 @@ def test_chat_message_base_model(
     assert chat_message_base_model.conversation_id == 7
 
     # Check the model_dump() method
-    chat_message_dict = chat_message_base_model.model_dump()
+    chat_message_dict = chat_message_base_model.model_dump(exclude_none=True)
     assert chat_message_dict == {
         "PK": "12345678987",
         "SK": "MESSAGE#2024-06-19 03:41:42.269532+00:00",
@@ -70,9 +70,21 @@ def test_chat_message_from_dynamodb_item():
         "whatsapp_timestamp": {"S": "1718768502"},
         "correlation_id": {"S": str(uuid4())},
         "conversation_id": {"N": "42"},
+        "system_response": {"M": {"text": {"S": "hello"}}},
+        "Response": {
+            "M": {
+                "reply": {"S": "hello"},
+                "metadata": {"M": {"foo": {"S": "bar"}}},
+            }
+        },
     }
 
     chat_message_instance = MessageBaseModel.from_dynamodb_item(dynamodb_item)
     assert chat_message_instance.PK == "12345678987"
     assert chat_message_instance.SK == "MESSAGE#2024-06-19 03:41:42.269532+00:00"
     assert chat_message_instance.conversation_id == 42
+    assert chat_message_instance.system_response == {"text": "hello"}
+    assert chat_message_instance.Response == {
+        "reply": "hello",
+        "metadata": {"foo": "bar"},
+    }

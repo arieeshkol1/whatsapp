@@ -52,7 +52,7 @@ def test_chat_message_text_model(
     assert chat_message_text_model.text == "Hello by Santi!"
 
     # Check the model_dump() method
-    chat_message_dict = chat_message_text_model.model_dump()
+    chat_message_dict = chat_message_text_model.model_dump(exclude_none=True)
     assert chat_message_dict == {
         "PK": "12345678987",
         "SK": "MESSAGE#2024-06-19 03:41:42.269532+00:00",
@@ -81,6 +81,8 @@ def test_chat_message_text_model_from_dynamodb_item():
         "whatsapp_timestamp": {"S": "1718768502"},
         "correlation_id": {"S": str(uuid4())},
         "conversation_id": {"N": "2"},
+        "system_response": {"M": {"text": {"S": "שלום"}}},
+        "Response": {"M": {"reply": {"S": "שלום"}}},
     }
 
     chat_message_instance = TextMessageModel.from_dynamodb_item(dynamodb_item)
@@ -92,3 +94,5 @@ def test_chat_message_text_model_from_dynamodb_item():
     # Check additional attributes from text message model
     assert chat_message_instance.text == "Hello by Santi!"
     assert chat_message_instance.conversation_id == 2
+    assert chat_message_instance.system_response == {"text": "שלום"}
+    assert chat_message_instance.Response == {"reply": "שלום"}

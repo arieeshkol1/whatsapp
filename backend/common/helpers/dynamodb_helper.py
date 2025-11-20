@@ -278,6 +278,7 @@ class DynamoDBHelper:
         partition_keys: List[str],
         whatsapp_id: str,
         system_response: Dict[str, Any],
+        full_response: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Attach system response metadata to a stored message.
 
@@ -320,11 +321,30 @@ class DynamoDBHelper:
                 continue
 
             try:
-                self.table.update_item(
-                    Key={"PK": partition_key, "SK": sort_key},
-                    UpdateExpression="SET system_response = :system_response",
-                    ExpressionAttributeValues={":system_response": system_response},
-                )
+                update_parts = ["system_response = :system_response"]
+                expression_attribute_values: Dict[str, Any] = {
+                    ":system_response": system_response
+                }
+                expression_attribute_names: Optional[Dict[str, str]] = None
+
+                if full_response is not None:
+                    update_parts.append("#response = :response")
+                    expression_attribute_values[":response"] = full_response
+                    expression_attribute_names = {"#response": "Response"}
+
+                update_expression = "SET " + ", ".join(update_parts)
+
+                update_kwargs: Dict[str, Any] = {
+                    "Key": {"PK": partition_key, "SK": sort_key},
+                    "UpdateExpression": update_expression,
+                    "ExpressionAttributeValues": expression_attribute_values,
+                }
+                if expression_attribute_names:
+                    update_kwargs["ExpressionAttributeNames"] = (
+                        expression_attribute_names
+                    )
+
+                self.table.update_item(**update_kwargs)
                 return
             except ClientError as error:
                 logger.error(
