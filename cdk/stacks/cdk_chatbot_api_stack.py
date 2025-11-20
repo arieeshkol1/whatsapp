@@ -1,8 +1,10 @@
 # Built-in imports
+import json
 import os
 from typing import Any, Dict, Optional
 
 DEFAULT_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
+DB_AGENT_DEFAULT_FOUNDATION_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 FALLBACK_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
 MODELS_REQUIRING_INFERENCE_PROFILE = {
     "anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -76,6 +78,20 @@ class ChatbotAPIStack(Stack):
         )
         self.bedrock_agent_effective_foundation_model_id = (
             self._resolve_bedrock_foundation_model_id()
+        )
+        self.enable_db_agent = self.app_config.get("enable_db_agent", False)
+        self.db_agent_foundation_model_id = self.app_config.get(
+            "db_agent_foundation_model_id",
+            DB_AGENT_DEFAULT_FOUNDATION_MODEL_ID,
+        )
+        self.db_agent_inference_profile_arn = self.app_config.get(
+            "db_agent_inference_profile_arn"
+        )
+        self.db_agent_effective_foundation_model_id = (
+            self._resolve_bedrock_foundation_model_id(
+                self.db_agent_foundation_model_id,
+                self.db_agent_inference_profile_arn,
+            )
         )
 
         # Placeholder for optional resources initialised in later steps
@@ -354,6 +370,46 @@ class ChatbotAPIStack(Stack):
             role=bedrock_agent_lambda_role,
         )
 
+        db_agent_lambda_role = aws_iam.Role(
+            self,
+            "DbAgentLambdaRole",
+            assumed_by=aws_iam.ServicePrincipal("lambda.amazonaws.com"),
+            description="Role for DB Agent Lambda",
+            managed_policies=[
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaBasicExecutionRole",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonBedrockFullAccess",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonDynamoDBFullAccess",
+                ),
+            ],
+        )
+
+        self.lambda_db_action_groups = aws_lambda.Function(
+            self,
+            "Lambda-DB-Agent-AG",
+            runtime=aws_lambda.Runtime.PYTHON_3_11,
+            handler="db_agent/lambda_function.lambda_handler",
+            function_name=f"{self.main_resources_name}-db-agent-action-groups",
+            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
+            timeout=Duration.seconds(60),
+            memory_size=512,
+            environment={
+                "ENVIRONMENT": self.app_config["deployment_environment"],
+                "LOG_LEVEL": self.app_config["log_level"],
+                "USER_DATA_TABLE": (
+                    getattr(self, "user_data_table").table_name
+                    if hasattr(self, "user_data_table")
+                    else USER_DATA_TABLE_DEFAULT_NAME
+                ),
+                "INTERACTION_TABLE": self.dynamodb_table.table_name,
+            },
+            role=db_agent_lambda_role,
+        )
+
     def _build_state_machine_lambda_environment(self) -> Dict[str, str]:
         """Compose environment variables for the state machine processor Lambda."""
 
@@ -379,6 +435,8 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
+            "DB_AGENT_ID": self.app_config.get("db_agent_id"),
+            "DB_AGENT_ALIAS_ID": self.app_config.get("db_agent_alias_id"),
             "USER_DATA_TABLE": (
                 self.user_data_table.table_name
                 if hasattr(self, "user_data_table")
@@ -1115,6 +1173,14 @@ class ChatbotAPIStack(Stack):
             source_arn=f"arn:aws:bedrock:{self.region}:{self.account}:agent/*",
         )
 
+        if self.enable_db_agent:
+            self.lambda_db_action_groups.add_permission(
+                "AllowDbBedrock",
+                principal=aws_iam.ServicePrincipal("bedrock.amazonaws.com"),
+                action="lambda:InvokeFunction",
+                source_arn=f"arn:aws:bedrock:{self.region}:{self.account}:agent/*",
+            )
+
         bedrock_agent_role = aws_iam.Role(
             self,
             "BedrockAgentRole",
@@ -1138,6 +1204,39 @@ class ChatbotAPIStack(Stack):
 
         # Add additional IAM actions for the bedrock agent
         bedrock_agent_role.add_to_policy(
+            aws_iam.PolicyStatement(
+                effect=aws_iam.Effect.ALLOW,
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:InvokeModelEndpoint",
+                    "bedrock:InvokeModelEndpointAsync",
+                ],
+                resources=["*"],
+            )
+        )
+
+        db_bedrock_agent_role = aws_iam.Role(
+            self,
+            "DbBedrockAgentRole",
+            assumed_by=aws_iam.ServicePrincipal("bedrock.amazonaws.com"),
+            description="Role for DB Bedrock Agent",
+            managed_policies=[
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonBedrockFullAccess",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AWSLambda_FullAccess",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "CloudWatchLogsFullAccess",
+                ),
+            ],
+        )
+        if hasattr(self, "user_data_table"):
+            self.user_data_table.grant_read_write_data(db_bedrock_agent_role)
+        self.dynamodb_table.grant_read_write_data(db_bedrock_agent_role)
+        db_bedrock_agent_role.add_to_policy(
             aws_iam.PolicyStatement(
                 effect=aws_iam.Effect.ALLOW,
                 actions=[
@@ -1542,14 +1641,119 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                 string_value=self.bedrock_agent_inference_profile_arn,
             )
 
-    def _resolve_bedrock_foundation_model_id(self) -> str:
+        if self.enable_db_agent:
+            db_action_groups = [
+                aws_bedrock.CfnAgent.AgentActionGroupProperty(
+                    action_group_name="QueryUserData",
+                    description="Retrieve customer profile records from the UserData table.",
+                    action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
+                        lambda_=self.lambda_db_action_groups.function_arn,
+                    ),
+                    function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
+                        functions=[
+                            aws_bedrock.CfnAgent.FunctionProperty(
+                                name="QueryUserData",
+                                description="Fetch a user profile from the existing UserData table by phone number.",
+                                parameters={
+                                    "phone_number": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Phone number (primary key) to read from the UserData table.",
+                                        required=True,
+                                    ),
+                                },
+                            )
+                        ]
+                    ),
+                ),
+                aws_bedrock.CfnAgent.AgentActionGroupProperty(
+                    action_group_name="QueryInteractionHistory",
+                    description="Retrieve the past WhatsApp interactions stored in DynamoDB.",
+                    action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
+                        lambda_=self.lambda_db_action_groups.function_arn,
+                    ),
+                    function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
+                        functions=[
+                            aws_bedrock.CfnAgent.FunctionProperty(
+                                name="QueryInteractionHistory",
+                                description="Fetch historical conversation records using the interaction table keys.",
+                                parameters={
+                                    "partition_key": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Partition key value for the interaction history table.",
+                                        required=True,
+                                    ),
+                                    "sort_key_prefix": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Optional sort key prefix for filtering.",
+                                        required=False,
+                                    ),
+                                },
+                            )
+                        ]
+                    ),
+                ),
+            ]
+
+            db_bedrock_agent = aws_bedrock.CfnAgent(
+                self,
+                "DbBedrockAgent",
+                agent_name=f"{self.main_resources_name}-db-agent",
+                agent_resource_role_arn=db_bedrock_agent_role.role_arn,
+                description="Backend DB agent that queries user context tables for the WhatsApp workflow.",
+                foundation_model=self.db_agent_effective_foundation_model_id,
+                instruction="""
+You are the DB AGENT supporting the primary WhatsApp agent. Your responsibilities:
+- Use the QueryUserData and QueryInteractionHistory tools for any user profile or history lookups.
+- Always respond with JSON only, containing any retrieved records.
+""",
+                auto_prepare=True,
+                action_groups=db_action_groups,
+            )
+
+            if self.db_agent_inference_profile_arn:
+                db_bedrock_agent.add_override(
+                    "Properties.InferenceProfileArn",
+                    self.db_agent_inference_profile_arn,
+                )
+
+            db_agent_alias = aws_bedrock.CfnAgentAlias(
+                self,
+                "DbBedrockAgentAlias",
+                agent_alias_name="db-agent-alias",
+                agent_id=db_bedrock_agent.ref,
+                description="Alias for invoking the DB Bedrock agent",
+            )
+            db_agent_alias.add_dependency(db_bedrock_agent)
+
+            db_agent_alias_string = db_agent_alias.ref
+
+            aws_ssm.StringParameter(
+                self,
+                "SSMDBAgentAlias",
+                parameter_name=f"/{self.deployment_environment}/aws-wpp/bedrock-db-agent-alias-id-full-string",
+                string_value=db_agent_alias_string,
+            )
+            aws_ssm.StringParameter(
+                self,
+                "SSMDBAgentId",
+                parameter_name=f"/{self.deployment_environment}/aws-wpp/bedrock-db-agent-id",
+                string_value=db_bedrock_agent.ref,
+            )
+
+    def _resolve_bedrock_foundation_model_id(
+        self,
+        configured_model: Optional[str] = None,
+        inference_profile_arn: Optional[str] = None,
+    ) -> str:
         """Return the model identifier that should back the agent orchestration step."""
 
-        configured_model = self.bedrock_agent_foundation_model_id or (
-            DEFAULT_AGENT_FOUNDATION_MODEL_ID
+        configured_model = configured_model or self.bedrock_agent_foundation_model_id
+        configured_model = configured_model or DEFAULT_AGENT_FOUNDATION_MODEL_ID
+        inference_profile_arn = inference_profile_arn or (
+            self.bedrock_agent_inference_profile_arn
         )
 
-        if self.bedrock_agent_inference_profile_arn:
+        if inference_profile_arn:
             return configured_model
 
         if configured_model in MODELS_REQUIRING_INFERENCE_PROFILE:
