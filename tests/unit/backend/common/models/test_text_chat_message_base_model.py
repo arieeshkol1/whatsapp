@@ -12,7 +12,7 @@ def correlation_id():
 @pytest.fixture
 def chat_message_base_model(correlation_id) -> MessageBaseModel:
     return MessageBaseModel(
-        PK="NUMBER#12345678987",
+        PK="12345678987",
         SK="MESSAGE#2024-06-19 03:41:42.269532+00:00",
         created_at="2024-06-19 03:41:42.269532+00:00",
         from_number="12345678987",
@@ -38,7 +38,7 @@ def test_chat_message_text_model(
     chat_message_text_model: TextMessageModel, correlation_id
 ):
     # Check the model attributes
-    assert chat_message_text_model.PK == "NUMBER#12345678987"
+    assert chat_message_text_model.PK == "12345678987"
     assert chat_message_text_model.SK == "MESSAGE#2024-06-19 03:41:42.269532+00:00"
     assert chat_message_text_model.created_at == "2024-06-19 03:41:42.269532+00:00"
     assert chat_message_text_model.from_number == "12345678987"
@@ -54,7 +54,7 @@ def test_chat_message_text_model(
     # Check the model_dump() method
     chat_message_dict = chat_message_text_model.model_dump()
     assert chat_message_dict == {
-        "PK": "NUMBER#12345678987",
+        "PK": "12345678987",
         "SK": "MESSAGE#2024-06-19 03:41:42.269532+00:00",
         "created_at": "2024-06-19 03:41:42.269532+00:00",
         "from_number": "12345678987",
@@ -69,7 +69,7 @@ def test_chat_message_text_model(
 
 def test_chat_message_text_model_from_dynamodb_item():
     dynamodb_item = {
-        "PK": {"S": "NUMBER#12345678987"},
+        "PK": {"S": "12345678987"},
         "SK": {"S": "MESSAGE#2024-06-19 03:41:42.269532+00:00"},
         "created_at": {"S": "2024-06-19 03:41:42.269532+00:00"},
         "from_number": {"S": "12345678987"},
@@ -86,7 +86,7 @@ def test_chat_message_text_model_from_dynamodb_item():
     chat_message_instance = TextMessageModel.from_dynamodb_item(dynamodb_item)
 
     # Check core attributes from base model
-    assert chat_message_instance.PK == "NUMBER#12345678987"
+    assert chat_message_instance.PK == "12345678987"
     assert chat_message_instance.SK == "MESSAGE#2024-06-19 03:41:42.269532+00:00"
 
     # Check additional attributes from text message model
