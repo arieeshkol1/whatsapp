@@ -1,4 +1,21 @@
-from typing import Optional
+from typing import Any, Dict, Optional
+
+from boto3.dynamodb.types import TypeDeserializer
+
+
+_deserializer = TypeDeserializer()
+
+
+def _deserialize_attribute(value: Optional[Dict[str, Any]]) -> Optional[Any]:
+    if not isinstance(value, dict):
+        return None
+
+    try:
+        return _deserializer.deserialize(value)
+    except Exception:
+        return None
+
+
 from pydantic import BaseModel, Field
 
 
@@ -7,7 +24,7 @@ class MessageBaseModel(BaseModel):
     Class that represents a Chat Message item (Base Model).
 
     Attributes:
-        PK: str: Primary Key for the DynamoDB item (NUMBER#<phone_number>)
+        PK: str: Primary Key for the DynamoDB item (<phone_number>)
         SK: str: Sort Key for the DynamoDB item (MESSAGE#<datetime>)
         from_number: str: Phone number of the sender.
         created_at: str: Creation datetime of the message.
@@ -19,7 +36,7 @@ class MessageBaseModel(BaseModel):
             message belongs to.
     """
 
-    PK: str = Field(pattern=r"^NUMBER#\d{10,13}$")
+    PK: str = Field(pattern=r"^\d{10,13}$")
     SK: str = Field(pattern=r"^MESSAGE#")
     created_at: str
     from_number: str
@@ -28,6 +45,8 @@ class MessageBaseModel(BaseModel):
     whatsapp_timestamp: str
     correlation_id: Optional[str] = None
     conversation_id: int = Field(default=1, ge=1)
+    system_response: Optional[Dict[str, Any]] = None
+    Response: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_dynamodb_item(cls, dynamodb_item: dict) -> "MessageBaseModel":
@@ -43,4 +62,8 @@ class MessageBaseModel(BaseModel):
             conversation_id=int(
                 dynamodb_item.get("conversation_id", {}).get("N", "1") or 1
             ),
+            system_response=_deserialize_attribute(
+                dynamodb_item.get("system_response")
+            ),
+            Response=_deserialize_attribute(dynamodb_item.get("Response")),
         )

@@ -13,7 +13,7 @@ def correlation_id():
 @pytest.fixture
 def chat_message_base_model(correlation_id) -> MessageBaseModel:
     return MessageBaseModel(
-        PK="NUMBER#12345678987",
+        PK="12345678987",
         SK="MESSAGE#2024-06-19 03:41:42.269532+00:00",
         created_at="2024-06-19 03:41:42.269532+00:00",
         from_number="12345678987",
@@ -29,7 +29,7 @@ def test_chat_message_base_model(
     chat_message_base_model: MessageBaseModel, correlation_id
 ):
     # Check the model attributes
-    assert chat_message_base_model.PK == "NUMBER#12345678987"
+    assert chat_message_base_model.PK == "12345678987"
     assert chat_message_base_model.SK == "MESSAGE#2024-06-19 03:41:42.269532+00:00"
     assert chat_message_base_model.created_at == "2024-06-19 03:41:42.269532+00:00"
     assert chat_message_base_model.from_number == "12345678987"
@@ -43,9 +43,9 @@ def test_chat_message_base_model(
     assert chat_message_base_model.conversation_id == 7
 
     # Check the model_dump() method
-    chat_message_dict = chat_message_base_model.model_dump()
+    chat_message_dict = chat_message_base_model.model_dump(exclude_none=True)
     assert chat_message_dict == {
-        "PK": "NUMBER#12345678987",
+        "PK": "12345678987",
         "SK": "MESSAGE#2024-06-19 03:41:42.269532+00:00",
         "created_at": "2024-06-19 03:41:42.269532+00:00",
         "from_number": "12345678987",
@@ -59,7 +59,7 @@ def test_chat_message_base_model(
 
 def test_chat_message_from_dynamodb_item():
     dynamodb_item = {
-        "PK": {"S": "NUMBER#12345678987"},
+        "PK": {"S": "12345678987"},
         "SK": {"S": "MESSAGE#2024-06-19 03:41:42.269532+00:00"},
         "created_at": {"S": "2024-06-19 03:41:42.269532+00:00"},
         "from_number": {"S": "12345678987"},
@@ -70,9 +70,21 @@ def test_chat_message_from_dynamodb_item():
         "whatsapp_timestamp": {"S": "1718768502"},
         "correlation_id": {"S": str(uuid4())},
         "conversation_id": {"N": "42"},
+        "system_response": {"M": {"text": {"S": "hello"}}},
+        "Response": {
+            "M": {
+                "reply": {"S": "hello"},
+                "metadata": {"M": {"foo": {"S": "bar"}}},
+            }
+        },
     }
 
     chat_message_instance = MessageBaseModel.from_dynamodb_item(dynamodb_item)
-    assert chat_message_instance.PK == "NUMBER#12345678987"
+    assert chat_message_instance.PK == "12345678987"
     assert chat_message_instance.SK == "MESSAGE#2024-06-19 03:41:42.269532+00:00"
     assert chat_message_instance.conversation_id == 42
+    assert chat_message_instance.system_response == {"text": "hello"}
+    assert chat_message_instance.Response == {
+        "reply": "hello",
+        "metadata": {"foo": "bar"},
+    }
