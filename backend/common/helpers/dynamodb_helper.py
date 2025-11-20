@@ -328,9 +328,14 @@ class DynamoDBHelper:
                 expression_attribute_names: Optional[Dict[str, str]] = None
 
                 if full_response is not None:
-                    update_parts.append("#response = :response")
+                    update_parts.extend(
+                        ["#response = :response", "#system_response_full = :response"]
+                    )
                     expression_attribute_values[":response"] = full_response
-                    expression_attribute_names = {"#response": "Response"}
+                    expression_attribute_names = {
+                        "#response": "Response",
+                        "#system_response_full": "System_Response",
+                    }
 
                 update_expression = "SET " + ", ".join(update_parts)
 

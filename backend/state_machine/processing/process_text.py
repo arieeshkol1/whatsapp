@@ -698,6 +698,7 @@ class ProcessText(BaseStepFunction):
                     "Bedrock response was not valid JSON",
                     extra={"session_id": session_identifier},
                 )
+                bedrock_response_json = {"raw_response": raw_response}
             else:
                 if isinstance(parsed, dict):
                     bedrock_response_json = parsed
@@ -727,6 +728,7 @@ class ProcessText(BaseStepFunction):
                         "Bedrock response JSON was not an object",
                         extra={"type": type(parsed).__name__},
                     )
+                    bedrock_response_json = {"raw_response": parsed}
 
         self.response_message = unescape(reply_text)
         system_response: Dict[str, Any] = {"text": self.response_message}

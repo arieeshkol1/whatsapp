@@ -44,4 +44,7 @@ class TextMessageModel(MessageBaseModel):
                 dynamodb_item.get("system_response")
             ),
             Response=_deserialize_attribute(dynamodb_item.get("Response")),
+            System_Response=_deserialize_attribute(
+                dynamodb_item.get("System_Response") or dynamodb_item.get("Response")
+            ),
         )

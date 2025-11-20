@@ -83,6 +83,7 @@ def test_chat_message_text_model_from_dynamodb_item():
         "conversation_id": {"N": "2"},
         "system_response": {"M": {"text": {"S": "שלום"}}},
         "Response": {"M": {"reply": {"S": "שלום"}}},
+        "System_Response": {"M": {"reply": {"S": "שלום"}}},
     }
 
     chat_message_instance = TextMessageModel.from_dynamodb_item(dynamodb_item)
@@ -96,3 +97,4 @@ def test_chat_message_text_model_from_dynamodb_item():
     assert chat_message_instance.conversation_id == 2
     assert chat_message_instance.system_response == {"text": "שלום"}
     assert chat_message_instance.Response == {"reply": "שלום"}
+    assert chat_message_instance.System_Response == {"reply": "שלום"}

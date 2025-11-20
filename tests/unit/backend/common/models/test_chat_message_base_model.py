@@ -77,6 +77,12 @@ def test_chat_message_from_dynamodb_item():
                 "metadata": {"M": {"foo": {"S": "bar"}}},
             }
         },
+        "System_Response": {
+            "M": {
+                "reply": {"S": "hello"},
+                "metadata": {"M": {"foo": {"S": "bar"}}},
+            }
+        },
     }
 
     chat_message_instance = MessageBaseModel.from_dynamodb_item(dynamodb_item)
@@ -85,6 +91,10 @@ def test_chat_message_from_dynamodb_item():
     assert chat_message_instance.conversation_id == 42
     assert chat_message_instance.system_response == {"text": "hello"}
     assert chat_message_instance.Response == {
+        "reply": "hello",
+        "metadata": {"foo": "bar"},
+    }
+    assert chat_message_instance.System_Response == {
         "reply": "hello",
         "metadata": {"foo": "bar"},
     }

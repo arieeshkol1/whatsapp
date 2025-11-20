@@ -47,6 +47,7 @@ class MessageBaseModel(BaseModel):
     conversation_id: int = Field(default=1, ge=1)
     system_response: Optional[Dict[str, Any]] = None
     Response: Optional[Dict[str, Any]] = None
+    System_Response: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_dynamodb_item(cls, dynamodb_item: dict) -> "MessageBaseModel":
@@ -66,4 +67,7 @@ class MessageBaseModel(BaseModel):
                 dynamodb_item.get("system_response")
             ),
             Response=_deserialize_attribute(dynamodb_item.get("Response")),
+            System_Response=_deserialize_attribute(
+                dynamodb_item.get("System_Response") or dynamodb_item.get("Response")
+            ),
         )
