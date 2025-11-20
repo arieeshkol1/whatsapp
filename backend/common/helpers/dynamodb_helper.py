@@ -325,13 +325,16 @@ class DynamoDBHelper:
                 expression_attribute_values: Dict[str, Any] = {
                     ":system_response": system_response
                 }
+
+                full_response_payload = full_response or system_response
+
                 expression_attribute_names: Optional[Dict[str, str]] = None
 
-                if full_response is not None:
+                if full_response_payload is not None:
                     update_parts.extend(
                         ["#response = :response", "#system_response_full = :response"]
                     )
-                    expression_attribute_values[":response"] = full_response
+                    expression_attribute_values[":response"] = full_response_payload
                     expression_attribute_names = {
                         "#response": "Response",
                         "#system_response_full": "System_Response",
