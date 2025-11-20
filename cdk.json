@@ -11,7 +11,7 @@
       "dev": {
         "deployment_environment": "dev",
         "log_level": "DEBUG",
-        "table_name": "aws-wpp-dev",
+        "table_name": "Interaction-history",
         "agents_data_table_name": "aws-whatsapp-agents-data-dev",
         "rules_table_name": "aws-whatsapp-rules-dev",
         "ruleset_id": "default",
