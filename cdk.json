@@ -26,7 +26,6 @@
         "bedrock_agent_foundation_model_id": "amazon.nova-lite-v1:0",
         "bedrock_agent_inference_profile_arn": null,
         "ASSESS_CHANGES_FEATURE": "off",
-        "USER_INFO_TABLE": "UsersInfo",
         "RULES_TABLE": "aws-whatsapp-rules-dev"
       },
       "prod": {
@@ -47,7 +46,6 @@
         "bedrock_agent_foundation_model_id": "amazon.nova-lite-v1:0",
         "bedrock_agent_inference_profile_arn": null,
         "ASSESS_CHANGES_FEATURE": "off",
-        "USER_INFO_TABLE": "UsersInfo",
         "RULES_TABLE": "aws-whatsapp-rules-prod"
       }
     }

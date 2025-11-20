@@ -8,7 +8,6 @@ MODELS_REQUIRING_INFERENCE_PROFILE = {
     "anthropic.claude-3-5-haiku-20241022-v1:0",
 }
 
-USERS_INFO_TABLE_DEFAULT_NAME = "UsersInfo"
 USER_DATA_TABLE_DEFAULT_NAME = "UserData"
 
 # External imports
@@ -84,7 +83,6 @@ class ChatbotAPIStack(Stack):
         # Main methods for the deployment
         self.import_secrets()
         self.create_dynamodb_table()
-        self.create_users_info_table()
         self.create_user_data_table()  # NEW: UserData table (+ Name GSI)
         self.create_lambda_layers()
         self.create_lambda_functions()
@@ -128,28 +126,6 @@ class ChatbotAPIStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
-
-    def create_users_info_table(self) -> None:
-        """Create (or name-reserve) the UsersInfo DynamoDB table."""
-        # Support both keys for backwards compatibility, preferring explicit USER_INFO_TABLE
-        users_info_table_name = self.app_config.get(
-            "users_info_table_name", USERS_INFO_TABLE_DEFAULT_NAME
-        )
-        users_info_table_name = self.app_config.get(
-            "USER_INFO_TABLE", users_info_table_name
-        )
-
-        self.users_info_table = aws_dynamodb.Table(
-            self,
-            "DynamoDB-Table-UsersInfo",
-            table_name=users_info_table_name,
-            partition_key=aws_dynamodb.Attribute(
-                name="PhoneNumber", type=aws_dynamodb.AttributeType.STRING
-            ),
-            billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.RETAIN,
-        )
-        Tags.of(self.users_info_table).add("Name", users_info_table_name)
 
     def create_user_data_table(self) -> None:
         """Create UserData DynamoDB table (PK=PhoneNumber) and make 'Name' a queryable string via GSI."""
@@ -287,10 +263,6 @@ class ChatbotAPIStack(Stack):
         self.dynamodb_table.grant_read_write_data(
             self.lambda_state_machine_process_message
         )
-        if hasattr(self, "users_info_table"):
-            self.users_info_table.grant_read_write_data(
-                self.lambda_state_machine_process_message
-            )
         if hasattr(self, "user_data_table"):
             self.user_data_table.grant_read_write_data(
                 self.lambda_state_machine_process_message
@@ -307,8 +279,6 @@ class ChatbotAPIStack(Stack):
         ]
         # Allow explicit access by ARN as well (in addition to grant helpers)
         resources_arns = []
-        if hasattr(self, "users_info_table"):
-            resources_arns.append(self.users_info_table.table_arn)
         if hasattr(self, "user_data_table"):
             resources_arns.append(self.user_data_table.table_arn)
         if resources_arns:
@@ -395,9 +365,6 @@ class ChatbotAPIStack(Stack):
             "SECRET_NAME": self.app_config["secret_name"],
             "META_ENDPOINT": self.app_config["meta_endpoint"],
             "ASSESS_CHANGES_FEATURE": "true",
-            "USER_INFO_TABLE": self.app_config.get(
-                "USER_INFO_TABLE", self.users_info_table.table_name
-            ),
             "USER_DATA_TABLE": self.app_config.get(
                 "USER_DATA_TABLE",
                 (
@@ -413,11 +380,6 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
-            "USER_INFO_TABLE": (
-                self.users_info_table.table_name
-                if hasattr(self, "users_info_table")
-                else None
-            ),
             "USER_DATA_TABLE": (
                 self.user_data_table.table_name
                 if hasattr(self, "user_data_table")
@@ -1171,8 +1133,7 @@ class ChatbotAPIStack(Stack):
                 ),
             ],
         )
-        # Grant Bedrock Agent role access to user tables (UsersInfo + UserData)
-        self.users_info_table.grant_read_write_data(bedrock_agent_role)
+        # Grant Bedrock Agent role access to user data table
         if hasattr(self, "user_data_table"):
             self.user_data_table.grant_read_write_data(bedrock_agent_role)
 
