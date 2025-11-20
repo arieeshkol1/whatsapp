@@ -158,6 +158,17 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     return digits
 
 
+def _normalize_user_type(user_type: Any) -> str:
+    """Return a normalised user type code."""
+
+    if isinstance(user_type, str):
+        code = user_type.strip().upper()
+        if code == "B":
+            return "B"
+
+    return "C"
+
+
 def _key_variants(e164: str) -> List[str]:
     """
     Generate robust variants for lookup to tolerate bad stored keys.
@@ -629,6 +640,7 @@ class AssessChanges:
         pn = item.get("PhoneNumber")
         if isinstance(pn, str):
             item["PhoneNumber"] = pn.strip()
+        item["UserType"] = _normalize_user_type(item.get("UserType"))
         attributes = item.get("Attributes")
         if isinstance(attributes, dict):
             cleaned_attributes = _json_safe_value(attributes)
