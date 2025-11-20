@@ -340,9 +340,9 @@ class DynamoDBHelper:
                     "ExpressionAttributeValues": expression_attribute_values,
                 }
                 if expression_attribute_names:
-                    update_kwargs["ExpressionAttributeNames"] = (
-                        expression_attribute_names
-                    )
+                    update_kwargs[
+                        "ExpressionAttributeNames"
+                    ] = expression_attribute_names
 
                 self.table.update_item(**update_kwargs)
                 return

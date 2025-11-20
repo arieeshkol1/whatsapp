@@ -14,6 +14,8 @@ def _deserialize_attribute(value: Optional[Dict[str, Any]]) -> Optional[Any]:
         return _deserializer.deserialize(value)
     except Exception:
         return None
+
+
 from pydantic import BaseModel, Field
 
 
