@@ -1503,11 +1503,11 @@ class ChatbotAPIStack(Stack):
                 knowledge_base_id=bedrock_knowledge_base.ref,
                 description="The S3 data source definition for the bedrock knowledge base containing information about projects.",
                 data_source_configuration=aws_bedrock.CfnDataSource.DataSourceConfigurationProperty(
+                    type="S3",
                     s3_configuration=aws_bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
                         bucket_arn=s3_bucket_kb.bucket_arn,
-                        inclusion_prefixes=["docs"],
+                        inclusion_prefixes=["business-rules"],
                     ),
-                    type="S3",
                 ),
                 vector_ingestion_configuration=aws_bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
                     chunking_configuration=aws_bedrock.CfnDataSource.ChunkingConfigurationProperty(
