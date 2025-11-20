@@ -1,8 +1,10 @@
 # Built-in imports
+import json
 import os
 from typing import Any, Dict, Optional
 
 DEFAULT_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
+DB_AGENT_DEFAULT_FOUNDATION_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 FALLBACK_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
 MODELS_REQUIRING_INFERENCE_PROFILE = {
     "anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -76,6 +78,20 @@ class ChatbotAPIStack(Stack):
         )
         self.bedrock_agent_effective_foundation_model_id = (
             self._resolve_bedrock_foundation_model_id()
+        )
+        self.enable_db_agent = self.app_config.get("enable_db_agent", False)
+        self.db_agent_foundation_model_id = self.app_config.get(
+            "db_agent_foundation_model_id",
+            DB_AGENT_DEFAULT_FOUNDATION_MODEL_ID,
+        )
+        self.db_agent_inference_profile_arn = self.app_config.get(
+            "db_agent_inference_profile_arn"
+        )
+        self.db_agent_effective_foundation_model_id = (
+            self._resolve_bedrock_foundation_model_id(
+                self.db_agent_foundation_model_id,
+                self.db_agent_inference_profile_arn,
+            )
         )
 
         # Placeholder for optional resources initialised in later steps
@@ -354,6 +370,52 @@ class ChatbotAPIStack(Stack):
             role=bedrock_agent_lambda_role,
         )
 
+        db_agent_lambda_role = aws_iam.Role(
+            self,
+            "DbAgentLambdaRole",
+            assumed_by=aws_iam.ServicePrincipal("lambda.amazonaws.com"),
+            description="Role for DB Agent Lambda",
+            managed_policies=[
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaBasicExecutionRole",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonBedrockFullAccess",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonDynamoDBFullAccess",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonS3FullAccess",
+                ),
+            ],
+        )
+
+        db_rules_bucket_name = f"{self.main_resources_name}-db-rules-{self.account}"
+        self.lambda_db_action_groups = aws_lambda.Function(
+            self,
+            "Lambda-DB-Agent-AG",
+            runtime=aws_lambda.Runtime.PYTHON_3_11,
+            handler="db_agent/lambda_function.lambda_handler",
+            function_name=f"{self.main_resources_name}-db-agent-action-groups",
+            code=aws_lambda.Code.from_asset(PATH_TO_LAMBDA_FUNCTION_FOLDER),
+            timeout=Duration.seconds(60),
+            memory_size=512,
+            environment={
+                "ENVIRONMENT": self.app_config["deployment_environment"],
+                "LOG_LEVEL": self.app_config["log_level"],
+                "RULES_BUCKET": db_rules_bucket_name,
+                "RULES_PREFIX": "rules/",
+                "USER_DATA_TABLE": (
+                    getattr(self, "user_data_table").table_name
+                    if hasattr(self, "user_data_table")
+                    else USER_DATA_TABLE_DEFAULT_NAME
+                ),
+                "INTERACTION_TABLE": self.dynamodb_table.table_name,
+            },
+            role=db_agent_lambda_role,
+        )
+
     def _build_state_machine_lambda_environment(self) -> Dict[str, str]:
         """Compose environment variables for the state machine processor Lambda."""
 
@@ -379,6 +441,8 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
+            "DB_AGENT_ID": self.app_config.get("db_agent_id"),
+            "DB_AGENT_ALIAS_ID": self.app_config.get("db_agent_alias_id"),
             "USER_DATA_TABLE": (
                 self.user_data_table.table_name
                 if hasattr(self, "user_data_table")
@@ -1065,6 +1129,11 @@ class ChatbotAPIStack(Stack):
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "knowledge_base",
         )
+        PATH_TO_DB_AGENT_KB_FOLDER = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "knowledge_base",
+            "db_agent",
+        )
         PATH_TO_CUSTOM_RESOURCES = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "custom_resources",
@@ -1115,6 +1184,14 @@ class ChatbotAPIStack(Stack):
             source_arn=f"arn:aws:bedrock:{self.region}:{self.account}:agent/*",
         )
 
+        if self.enable_db_agent:
+            self.lambda_db_action_groups.add_permission(
+                "AllowDbBedrock",
+                principal=aws_iam.ServicePrincipal("bedrock.amazonaws.com"),
+                action="lambda:InvokeFunction",
+                source_arn=f"arn:aws:bedrock:{self.region}:{self.account}:agent/*",
+            )
+
         bedrock_agent_role = aws_iam.Role(
             self,
             "BedrockAgentRole",
@@ -1138,6 +1215,39 @@ class ChatbotAPIStack(Stack):
 
         # Add additional IAM actions for the bedrock agent
         bedrock_agent_role.add_to_policy(
+            aws_iam.PolicyStatement(
+                effect=aws_iam.Effect.ALLOW,
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:InvokeModelEndpoint",
+                    "bedrock:InvokeModelEndpointAsync",
+                ],
+                resources=["*"],
+            )
+        )
+
+        db_bedrock_agent_role = aws_iam.Role(
+            self,
+            "DbBedrockAgentRole",
+            assumed_by=aws_iam.ServicePrincipal("bedrock.amazonaws.com"),
+            description="Role for DB Bedrock Agent",
+            managed_policies=[
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonBedrockFullAccess",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AWSLambda_FullAccess",
+                ),
+                aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "CloudWatchLogsFullAccess",
+                ),
+            ],
+        )
+        if hasattr(self, "user_data_table"):
+            self.user_data_table.grant_read_write_data(db_bedrock_agent_role)
+        self.dynamodb_table.grant_read_write_data(db_bedrock_agent_role)
+        db_bedrock_agent_role.add_to_policy(
             aws_iam.PolicyStatement(
                 effect=aws_iam.Effect.ALLOW,
                 actions=[
@@ -1542,14 +1652,421 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                 string_value=self.bedrock_agent_inference_profile_arn,
             )
 
-    def _resolve_bedrock_foundation_model_id(self) -> str:
+        if self.enable_db_agent:
+            db_rules_bucket = aws_s3.Bucket(
+                self,
+                "DbAgentRulesBucket",
+                bucket_name=f"{self.main_resources_name}-db-rules-{self.account}",
+                auto_delete_objects=True,
+                versioned=True,
+                encryption=aws_s3.BucketEncryption.S3_MANAGED,
+                block_public_access=aws_s3.BlockPublicAccess.BLOCK_ALL,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+            db_rules_bucket.grant_read_write(
+                aws_iam.ServicePrincipal("bedrock.amazonaws.com")
+            )
+            db_rules_bucket.grant_read_write(self.lambda_db_action_groups)
+
+            s3d.BucketDeployment(
+                self,
+                "DbAgentKbUpload",
+                sources=[s3d.Source.asset(PATH_TO_DB_AGENT_KB_FOLDER)],
+                destination_bucket=db_rules_bucket,
+                destination_key_prefix="rules/",
+            )
+
+            db_opensearch_encryption_policy = oss.CfnSecurityPolicy(
+                self,
+                "DbOpenSearchServerlessEncryptionPolicy",
+                name="db-agent-encryption-policy",
+                policy='{"Rules":[{"ResourceType":"collection","Resource":["collection/*"]}],"AWSOwnedKey":true}',
+                type="encryption",
+                description="Encryption policy for the DB agent opensearch serverless collection",
+            )
+
+            db_opensearch_network_policy = oss.CfnSecurityPolicy(
+                self,
+                "DbOpenSearchServerlessNetworkPolicy",
+                name="db-agent-network-policy",
+                policy='[{"Description":"Public access for collection","Rules":[{"ResourceType":"dashboard","Resource":["collection/*"]},{"ResourceType":"collection","Resource":["collection/*"]}],"AllowFromPublic":true}]',
+                type="network",
+                description="Network policy for the DB agent opensearch serverless collection",
+            )
+
+            db_opensearch_collection = oss.CfnCollection(
+                self,
+                "OpenSearchCollection-DbAgent",
+                name="db-agent-collection",
+                description="Collection for the DB agent business rules knowledge base",
+                standby_replicas="DISABLED",
+                type="VECTORSEARCH",
+            )
+
+            db_opensearch_collection.add_dependency(db_opensearch_encryption_policy)
+            db_opensearch_collection.add_dependency(db_opensearch_network_policy)
+
+            db_bedrock_kb_role = aws_iam.Role(
+                self,
+                "DbIAMRole-BedrockKB",
+                role_name=f"{self.main_resources_name}-db-bedrock-kb-role",
+                assumed_by=aws_iam.ServicePrincipal("bedrock.amazonaws.com"),
+                managed_policies=[
+                    aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                        "AmazonBedrockFullAccess"
+                    ),
+                    aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                        "AmazonOpenSearchServiceFullAccess"
+                    ),
+                    aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                        "AmazonS3FullAccess"
+                    ),
+                    aws_iam.ManagedPolicy.from_aws_managed_policy_name(
+                        "CloudWatchLogsFullAccess"
+                    ),
+                ],
+            )
+
+            db_rules_bucket.grant_read(db_bedrock_kb_role)
+            db_rules_bucket.grant_read(db_bedrock_agent_role)
+
+            db_index_name = "db-agent-rules"
+
+            db_create_index_lambda = aws_lambda.Function(
+                self,
+                "DbAgentIndex",
+                runtime=aws_lambda.Runtime.PYTHON_3_11,
+                handler="create_oss_index.handler",
+                code=aws_lambda.Code.from_asset(PATH_TO_CUSTOM_RESOURCES),
+                timeout=Duration.seconds(300),
+                environment={
+                    "COLLECTION_ENDPOINT": db_opensearch_collection.attr_collection_endpoint,
+                    "INDEX_NAME": db_index_name,
+                    "REGION": self.region,
+                },
+                layers=[self.lambda_layer_common],
+            )
+
+            db_create_index_lambda.role.add_to_principal_policy(
+                aws_iam.PolicyStatement(
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=[
+                        "es:ESHttpPut",
+                        "es:*",
+                        "iam:CreateServiceLinkedRole",
+                        "iam:PassRole",
+                        "iam:ListUsers",
+                        "iam:ListRoles",
+                        "aoss:*",
+                    ],
+                    resources=["*"],
+                )
+            )
+
+            db_opensearch_collection_access_policy = oss.CfnAccessPolicy(
+                self,
+                "OpenSearchServerlessCollectionAccessPolicyDbAgent",
+                name="db-agent-collection-access-policy",
+                policy=json.dumps(
+                    [
+                        {
+                            "Description": "Describe access for DB agent collection",
+                            "Rules": [
+                                {
+                                    "ResourceType": "collection",
+                                    "Resource": [
+                                        f"collection/{db_opensearch_collection.name}"
+                                    ],
+                                    "Permission": ["aoss:DescribeCollectionItems"],
+                                }
+                            ],
+                            "Principal": [
+                                db_bedrock_agent_role.role_arn,
+                                db_bedrock_kb_role.role_arn,
+                                db_create_index_lambda.role.role_arn,
+                                f"arn:aws:iam::{self.account}:root",
+                            ],
+                        }
+                    ]
+                ),
+                type="data",
+                description="Collection access policy for the DB agent opensearch serverless collection",
+            )
+
+            db_opensearch_index_access_policy = oss.CfnAccessPolicy(
+                self,
+                "OpenSearchServerlessIndexAccessPolicyDbAgent",
+                name="db-agent-index-access-policy",
+                policy=json.dumps(
+                    [
+                        {
+                            "Description": "Index access for DB agent",
+                            "Rules": [
+                                {
+                                    "ResourceType": "index",
+                                    "Resource": [
+                                        f"index/{db_opensearch_collection.name}/*"
+                                    ],
+                                    "Permission": ["aoss:APIAccessAll"],
+                                }
+                            ],
+                            "Principal": [
+                                db_bedrock_agent_role.role_arn,
+                                db_bedrock_kb_role.role_arn,
+                                db_create_index_lambda.role.role_arn,
+                                f"arn:aws:iam::{self.account}:root",
+                            ],
+                        }
+                    ]
+                ),
+                type="data",
+                description="Index access policy for the DB agent opensearch serverless collection",
+            )
+
+            for dependency in (
+                db_opensearch_collection_access_policy,
+                db_opensearch_index_access_policy,
+            ):
+                db_opensearch_collection.add_dependency(dependency)
+
+            db_aoss_lambda_params = {
+                "FunctionName": db_create_index_lambda.function_name,
+                "InvocationType": "RequestResponse",
+            }
+
+            db_trigger_lambda_cr = cr.AwsCustomResource(
+                self,
+                "DbIndexCreateCustomResource",
+                on_create=cr.AwsSdkCall(
+                    service="Lambda",
+                    action="invoke",
+                    parameters=db_aoss_lambda_params,
+                    physical_resource_id=cr.PhysicalResourceId.of("DbParameter.ARN"),
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_sdk_calls(
+                    resources=cr.AwsCustomResourcePolicy.ANY_RESOURCE
+                ),
+                removal_policy=RemovalPolicy.DESTROY,
+                timeout=Duration.seconds(300),
+            )
+
+            db_trigger_lambda_cr.grant_principal.add_to_principal_policy(
+                aws_iam.PolicyStatement(
+                    effect=aws_iam.Effect.ALLOW,
+                    actions=["lambda:*", "iam:CreateServiceLinkedRole", "iam:PassRole"],
+                    resources=["*"],
+                )
+            )
+
+            db_trigger_lambda_cr.node.add_dependency(db_opensearch_access_policy)
+            db_trigger_lambda_cr.node.add_dependency(db_opensearch_collection)
+
+            db_bedrock_knowledge_base = aws_bedrock.CfnKnowledgeBase(
+                self,
+                "DbBedrockKB",
+                name="db-agent-kb",
+                description="Knowledge base that only stores DB agent business rules (no user or history data).",
+                role_arn=db_bedrock_kb_role.role_arn,
+                knowledge_base_configuration=aws_bedrock.CfnKnowledgeBase.KnowledgeBaseConfigurationProperty(
+                    type="VECTOR",
+                    vector_knowledge_base_configuration=aws_bedrock.CfnKnowledgeBase.VectorKnowledgeBaseConfigurationProperty(
+                        embedding_model_arn=f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v1"
+                    ),
+                ),
+                storage_configuration=aws_bedrock.CfnKnowledgeBase.StorageConfigurationProperty(
+                    type="OPENSEARCH_SERVERLESS",
+                    opensearch_serverless_configuration=aws_bedrock.CfnKnowledgeBase.OpenSearchServerlessConfigurationProperty(
+                        collection_arn=db_opensearch_collection.attr_arn,
+                        vector_index_name=db_index_name,
+                        field_mapping=aws_bedrock.CfnKnowledgeBase.OpenSearchServerlessFieldMappingProperty(
+                            metadata_field="AMAZON_BEDROCK_METADATA",
+                            text_field="AMAZON_BEDROCK_TEXT_CHUNK",
+                            vector_field="bedrock-knowledge-base-default-vector",
+                        ),
+                    ),
+                ),
+            )
+
+            db_bedrock_knowledge_base.add_dependency(db_opensearch_collection)
+            db_bedrock_knowledge_base.node.add_dependency(db_trigger_lambda_cr)
+
+            db_bedrock_data_source = aws_bedrock.CfnDataSource(
+                self,
+                "DbBedrock-DataSource",
+                name="DbAgentDataSource",
+                knowledge_base_id=db_bedrock_knowledge_base.ref,
+                description="The S3 data source for the DB agent business-rules knowledge base.",
+                data_source_configuration=aws_bedrock.CfnDataSource.DataSourceConfigurationProperty(
+                    s3_configuration=aws_bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
+                        bucket_arn=db_rules_bucket.bucket_arn,
+                        inclusion_prefixes=["rules"],
+                    ),
+                    type="S3",
+                ),
+                vector_ingestion_configuration=aws_bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
+                    chunking_configuration=aws_bedrock.CfnDataSource.ChunkingConfigurationProperty(
+                        chunking_strategy="FIXED_SIZE",
+                        fixed_size_chunking_configuration=aws_bedrock.CfnDataSource.FixedSizeChunkingConfigurationProperty(
+                            max_tokens=300, overlap_percentage=20
+                        ),
+                    )
+                ),
+            )
+            db_bedrock_data_source.node.add_dependency(db_bedrock_knowledge_base)
+
+            db_action_groups = [
+                aws_bedrock.CfnAgent.AgentActionGroupProperty(
+                    action_group_name="UpdateBusinessRules",
+                    description="Upserts or refreshes business rules in the DB agent vector store.",
+                    action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
+                        lambda_=self.lambda_db_action_groups.function_arn,
+                    ),
+                    function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
+                        functions=[
+                            aws_bedrock.CfnAgent.FunctionProperty(
+                                name="UpdateBusinessRules",
+                                description="Update the business rule set that powers the DB agent knowledge base.",
+                                parameters={
+                                    "rule_id": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Identifier to store or update the business rule.",
+                                        required=True,
+                                    ),
+                                    "content": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Full text of the rule contents to persist.",
+                                        required=True,
+                                    ),
+                                    "metadata": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Optional metadata to associate with the rule (JSON string).",
+                                        required=False,
+                                    ),
+                                },
+                            )
+                        ]
+                    ),
+                ),
+                aws_bedrock.CfnAgent.AgentActionGroupProperty(
+                    action_group_name="QueryUserData",
+                    description="Retrieve customer profile records from the UserData table.",
+                    action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
+                        lambda_=self.lambda_db_action_groups.function_arn,
+                    ),
+                    function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
+                        functions=[
+                            aws_bedrock.CfnAgent.FunctionProperty(
+                                name="QueryUserData",
+                                description="Fetch a user profile from the existing UserData table by phone number.",
+                                parameters={
+                                    "phone_number": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Phone number (primary key) to read from the UserData table.",
+                                        required=True,
+                                    ),
+                                },
+                            )
+                        ]
+                    ),
+                ),
+                aws_bedrock.CfnAgent.AgentActionGroupProperty(
+                    action_group_name="QueryInteractionHistory",
+                    description="Retrieve the past WhatsApp interactions stored in DynamoDB.",
+                    action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
+                        lambda_=self.lambda_db_action_groups.function_arn,
+                    ),
+                    function_schema=aws_bedrock.CfnAgent.FunctionSchemaProperty(
+                        functions=[
+                            aws_bedrock.CfnAgent.FunctionProperty(
+                                name="QueryInteractionHistory",
+                                description="Fetch historical conversation records using the interaction table keys.",
+                                parameters={
+                                    "partition_key": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Partition key value for the interaction history table.",
+                                        required=True,
+                                    ),
+                                    "sort_key_prefix": aws_bedrock.CfnAgent.ParameterDetailProperty(
+                                        type="string",
+                                        description="Optional sort key prefix for filtering.",
+                                        required=False,
+                                    ),
+                                },
+                            )
+                        ]
+                    ),
+                ),
+            ]
+
+            db_bedrock_agent = aws_bedrock.CfnAgent(
+                self,
+                "DbBedrockAgent",
+                agent_name=f"{self.main_resources_name}-db-agent",
+                agent_resource_role_arn=db_bedrock_agent_role.role_arn,
+                description=(
+                    "Backend DB agent that maintains business rules and queries user context tables."
+                ),
+                foundation_model=self.db_agent_effective_foundation_model_id,
+                instruction="""
+You are the DB AGENT supporting the primary WhatsApp agent. Your responsibilities:
+- Keep business rules up to date inside the vector knowledge base sourced from S3 (business rules only).
+- Use the QueryUserData and QueryInteractionHistory tools for any user profile or history lookups instead of the knowledge base.
+Always respond with JSON only, containing any retrieved records or confirmation of updates.
+""",
+                auto_prepare=True,
+                action_groups=db_action_groups,
+                knowledge_bases=[
+                    aws_bedrock.CfnAgent.AgentKnowledgeBaseProperty(
+                        description="Business rules reference only (no user profiles or interaction history).",
+                        knowledge_base_id=db_bedrock_knowledge_base.ref,
+                    )
+                ],
+            )
+
+            if self.db_agent_inference_profile_arn:
+                db_bedrock_agent.add_override(
+                    "Properties.InferenceProfileArn",
+                    self.db_agent_inference_profile_arn,
+                )
+
+            db_agent_alias = aws_bedrock.CfnAgentAlias(
+                self,
+                "DbBedrockAgentAlias",
+                agent_alias_name="db-agent-alias",
+                agent_id=db_bedrock_agent.ref,
+                description="Alias for invoking the DB Bedrock agent",
+            )
+            db_agent_alias.add_dependency(db_bedrock_agent)
+
+            db_agent_alias_string = db_agent_alias.ref
+
+            aws_ssm.StringParameter(
+                self,
+                "SSMDBAgentAlias",
+                parameter_name=f"/{self.deployment_environment}/aws-wpp/bedrock-db-agent-alias-id-full-string",
+                string_value=db_agent_alias_string,
+            )
+            aws_ssm.StringParameter(
+                self,
+                "SSMDBAgentId",
+                parameter_name=f"/{self.deployment_environment}/aws-wpp/bedrock-db-agent-id",
+                string_value=db_bedrock_agent.ref,
+            )
+
+    def _resolve_bedrock_foundation_model_id(
+        self,
+        configured_model: Optional[str] = None,
+        inference_profile_arn: Optional[str] = None,
+    ) -> str:
         """Return the model identifier that should back the agent orchestration step."""
 
-        configured_model = self.bedrock_agent_foundation_model_id or (
-            DEFAULT_AGENT_FOUNDATION_MODEL_ID
+        configured_model = configured_model or self.bedrock_agent_foundation_model_id
+        configured_model = configured_model or DEFAULT_AGENT_FOUNDATION_MODEL_ID
+        inference_profile_arn = inference_profile_arn or (
+            self.bedrock_agent_inference_profile_arn
         )
 
-        if self.bedrock_agent_inference_profile_arn:
+        if inference_profile_arn:
             return configured_model
 
         if configured_model in MODELS_REQUIRING_INFERENCE_PROFILE:
