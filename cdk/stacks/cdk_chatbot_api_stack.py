@@ -1375,9 +1375,11 @@ class ChatbotAPIStack(Stack):
                                 {
                                     "ResourceType": "collection",
                                     "Resource": ["collection/*"],
-                                    "Permission": ["aoss:*"]
-                                    if enable_bedrock_knowledge
-                                    else ["aoss:DescribeCollectionItems"],
+                                    "Permission": (
+                                        ["aoss:*"]
+                                        if enable_bedrock_knowledge
+                                        else ["aoss:DescribeCollectionItems"]
+                                    ),
                                 }
                             ],
                             "Principal": [
@@ -1405,9 +1407,11 @@ class ChatbotAPIStack(Stack):
                                 {
                                     "ResourceType": "index",
                                     "Resource": ["index/*/*"],
-                                    "Permission": ["aoss:*"]
-                                    if enable_bedrock_knowledge
-                                    else ["aoss:APIAccessAll"],
+                                    "Permission": (
+                                        ["aoss:*"]
+                                        if enable_bedrock_knowledge
+                                        else ["aoss:APIAccessAll"]
+                                    ),
                                 }
                             ],
                             "Principal": [
@@ -1495,7 +1499,6 @@ class ChatbotAPIStack(Stack):
 
             bedrock_knowledge_base.add_dependency(opensearch_serverless_collection)
             bedrock_knowledge_base.node.add_dependency(trigger_lambda_cr)
-
 
         foundation_model_identifier = (
             self.bedrock_agent_inference_profile_arn
