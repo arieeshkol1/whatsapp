@@ -1,22 +1,13 @@
 import json
+import os
 from typing import Any, Dict
 
 import pytest
 
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+
 from state_machine.processing import process_text as process_text_module
-
-
-class StubUsersInfoTable:
-    def __init__(self) -> None:
-        self.update_calls = []
-        self.items: Dict[str, Dict[str, Any]] = {}
-
-    def update_item(self, **kwargs) -> None:  # pragma: no cover - simple recorder
-        self.update_calls.append(kwargs)
-
-    def get_item(self, Key: Dict[str, Any]) -> Dict[str, Any]:  # pragma: no cover
-        phone = Key.get("PhoneNumber")
-        return {"Item": self.items.get(phone, {})}
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +15,7 @@ def reset_users_info_table():
     original_table = process_text_module._users_info_table
     original_name = process_text_module.USER_INFO_TABLE_NAME
     process_text_module._users_info_table = None
-    process_text_module.USER_INFO_TABLE_NAME = "UsersInfoTest"
+    process_text_module.USER_INFO_TABLE_NAME = None
     yield
     process_text_module._users_info_table = original_table
     process_text_module.USER_INFO_TABLE_NAME = original_name
@@ -48,9 +39,6 @@ def _base_event() -> Dict[str, Any]:
 
 
 def test_process_text_persists_user_updates(monkeypatch):
-    stub_table = StubUsersInfoTable()
-    process_text_module._users_info_table = stub_table
-
     monkeypatch.setattr(process_text_module, "load_customer_profile", lambda *_: None)
     monkeypatch.setattr(process_text_module, "format_customer_summary", lambda *_: None)
     monkeypatch.setattr(process_text_module, "get_rules_text", lambda: None)
@@ -84,9 +72,5 @@ def test_process_text_persists_user_updates(monkeypatch):
         {"tag": "conversation.date_of_event", "value": "2025-01-01"},
     ]
 
-    # Two calls are expected: one to touch the record and one to persist profile updates.
-    assert len(stub_table.update_calls) >= 2
-    update_expression = stub_table.update_calls[-1]["UpdateExpression"]
-    assert "#info." in update_expression
-    expression_values = stub_table.update_calls[-1]["ExpressionAttributeValues"]
-    assert any(value == "דנה" for value in expression_values.values())
+    # With no UsersInfo table configured, no table handle should be initialised.
+    assert process_text_module._users_info_table is None

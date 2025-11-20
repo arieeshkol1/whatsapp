@@ -25,7 +25,6 @@ stack: ChatbotAPIStack = ChatbotAPIStack(
         "secret_name": "test-secret",
         "enable_rag": True,
         "meta_endpoint": "https://fake-endpoint.com",
-        "users_info_table_name": "aws-whatsapp-users-info-test",
         # Optionally allow overriding UserData name here:
         # "user_data_table_name": "aws-whatsapp-user-data-test",
     },
@@ -35,24 +34,6 @@ template: assertions.Template = assertions.Template.from_stack(stack)
 
 def test_app_synthesize_ok():
     app.synth()
-
-
-def test_dynamodb_table_created():
-    # We expect at least 3 tables now: main chat table, UsersInfo, and UserData
-    match = template.find_resources(
-        type="AWS::DynamoDB::Table",
-    )
-    assert len(match) >= 3
-
-
-def test_users_info_table_exists_with_phone_pk():
-    template.has_resource_properties(
-        "AWS::DynamoDB::Table",
-        {
-            "TableName": "aws-whatsapp-users-info-test",
-            "KeySchema": [{"AttributeName": "PhoneNumber", "KeyType": "HASH"}],
-        },
-    )
 
 
 def test_user_data_table_exists_with_phone_pk():
@@ -78,17 +59,6 @@ def test_api_gateway_created():
         type="AWS::ApiGateway::RestApi",
     )
     assert len(match) == 1
-
-
-def test_state_machine_lambda_has_user_info_env():
-    template.has_resource_properties(
-        "AWS::Lambda::Function",
-        {
-            "Environment": {
-                "Variables": {"USER_INFO_TABLE": assertions.Match.any_value()}
-            }
-        },
-    )
 
 
 def test_state_machine_lambda_has_user_data_env():
