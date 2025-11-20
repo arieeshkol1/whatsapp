@@ -1360,17 +1360,71 @@ class ChatbotAPIStack(Stack):
                 )
             )
 
-            opensearch_serverless_access_policy = oss.CfnAccessPolicy(
+            opensearch_serverless_collection_access_policy = oss.CfnAccessPolicy(
                 self,
-                "OpenSearchServerlessAccessPolicy",
-                name=f"{self.main_resources_name}-data-access-policy",
-                policy=f'[{{"Description":"Access for bedrock","Rules":[{{"ResourceType":"index","Resource":["index/*/*"],"Permission":["aoss:*"]}},{{"ResourceType":"collection","Resource":["collection/*"],"Permission":["aoss:*"]}}],"Principal":["{bedrock_agent_role.role_arn}","{bedrock_kb_role.role_arn}","{create_index_lambda.role.role_arn}","arn:aws:iam::{self.account}:root"]}}]',
+                "OpenSearchServerlessCollectionAccessPolicy",
+                name=f"{self.main_resources_name}-collection-access-policy",
+                policy=json.dumps(
+                    [
+                        {
+                            "Description": "Access for bedrock collection permissions",
+                            "Rules": [
+                                {
+                                    "ResourceType": "collection",
+                                    "Resource": ["collection/*"],
+                                    "Permission": ["aoss:*"]
+                                    if enable_bedrock_knowledge
+                                    else ["aoss:DescribeCollectionItems"],
+                                }
+                            ],
+                            "Principal": [
+                                bedrock_agent_role.role_arn,
+                                bedrock_kb_role.role_arn,
+                                create_index_lambda.role.role_arn,
+                                f"arn:aws:iam::{self.account}:root",
+                            ],
+                        }
+                    ]
+                ),
                 type="data",
-                description="Data access policy for the opensearch serverless collection",
+                description="Collection access policy for the opensearch serverless collection",
+            )
+
+            opensearch_serverless_index_access_policy = oss.CfnAccessPolicy(
+                self,
+                "OpenSearchServerlessIndexAccessPolicy",
+                name=f"{self.main_resources_name}-index-access-policy",
+                policy=json.dumps(
+                    [
+                        {
+                            "Description": "Access for bedrock index permissions",
+                            "Rules": [
+                                {
+                                    "ResourceType": "index",
+                                    "Resource": ["index/*/*"],
+                                    "Permission": ["aoss:*"]
+                                    if enable_bedrock_knowledge
+                                    else ["aoss:APIAccessAll"],
+                                }
+                            ],
+                            "Principal": [
+                                bedrock_agent_role.role_arn,
+                                bedrock_kb_role.role_arn,
+                                create_index_lambda.role.role_arn,
+                                f"arn:aws:iam::{self.account}:root",
+                            ],
+                        }
+                    ]
+                ),
+                type="data",
+                description="Index access policy for the opensearch serverless collection",
             )
 
             opensearch_serverless_collection.add_dependency(
-                opensearch_serverless_access_policy
+                opensearch_serverless_collection_access_policy
+            )
+            opensearch_serverless_collection.add_dependency(
+                opensearch_serverless_index_access_policy
             )
 
             aossLambdaParams = {
@@ -1402,7 +1456,12 @@ class ChatbotAPIStack(Stack):
                 )
             )
 
-            trigger_lambda_cr.node.add_dependency(opensearch_serverless_access_policy)
+            trigger_lambda_cr.node.add_dependency(
+                opensearch_serverless_collection_access_policy
+            )
+            trigger_lambda_cr.node.add_dependency(
+                opensearch_serverless_index_access_policy
+            )
             trigger_lambda_cr.node.add_dependency(opensearch_serverless_collection)
 
             bedrock_knowledge_base = aws_bedrock.CfnKnowledgeBase(
