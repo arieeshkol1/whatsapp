@@ -128,7 +128,7 @@ class ChatbotAPIStack(Stack):
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
 
     def create_user_data_table(self) -> None:
-        """Create UserData DynamoDB table (PK=PhoneNumber) and make 'Name' a queryable string via GSI."""
+        """Create UserData DynamoDB table (PK=PhoneNumber) for flexible attributes."""
         # Allow override via either key
         user_data_table_name = self.app_config.get(
             "user_data_table_name", USER_DATA_TABLE_DEFAULT_NAME
@@ -148,17 +148,6 @@ class ChatbotAPIStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
         Tags.of(self.user_data_table).add("Name", user_data_table_name)
-
-        # --- NEW: make 'Name' (string) queryable with a GSI ---
-        # You can still write 'Name' as a regular attribute with no schema,
-        # but this index allows efficient queries by Name.
-        self.user_data_table.add_global_secondary_index(
-            index_name="NameIndex",
-            partition_key=aws_dynamodb.Attribute(
-                name="Name", type=aws_dynamodb.AttributeType.STRING
-            ),
-            projection_type=aws_dynamodb.ProjectionType.ALL,
-        )
 
     def create_lambda_layers(self) -> None:
         """
