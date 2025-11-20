@@ -1,10 +1,22 @@
-# Business Rules Sample
+# דוגמה למסמך לוגיקה עסקית
 
-This document seeds the DB AGENT knowledge base. It demonstrates how rules can be expressed when updating the
-vector store via the UpdateBusinessRules action group. The knowledge base only contains business rules—user
-profiles and interaction history stay in DynamoDB and are queried through tools.
+מסמך זה נטען לדוגמת בסיס הידע של **DB AGENT**. הוא ממחיש כיצד כל עסק יוצר תיעוד חוקים בוקטור DB חדש על בסיס
+S3. המזהה של העסק הוא מספר הטלפון שלו, וכל מסמך מכיל הנחיות לבעל העסק למילוי הנתונים הבאים:
 
-- Orders must be acknowledged within 5 minutes of receipt.
-- Pricing adjustments require manager approval.
-- UserData queries should prioritise verified customer records.
-- Interaction-history entries should maintain chronological ordering for each session.
+1. **מוצרים / שירותים** – רשימת המוצרים או השירותים שהעסק מספק והייחודיות שלהם.
+2. **נתוני לקוח נדרשים** – עבור כל שירות, אילו נתונים חובה לאסוף מהלקוח (לדוגמה: שם מלא, טלפון, כתובת, סוג השירות, תאריך ביקור).
+3. **תיאור תהליך** – פירוט שלבי העבודה עבור כל שירות, כולל אחריות בעלי תפקידים וזמני תגובה.
+
+דוגמת תוכן:
+
+```
+טלפון עסק: +972501234567
+שירותים: ניקיון משרדים, פוליש וליטוש, הברקת חלונות.
+נתוני לקוח: שם מלא, מספר טלפון, כתובת, קומה/חדר, תאריך מועדף, סוג השירות המבוקש.
+תהליך ניקיון משרדים: 
+- יצירת קשר עם הלקוח בתוך 30 דקות לאישור פרטים. 
+- בדיקת זמינות צוות לפי אזור. 
+- שליחת סיכום ושעת הגעה בהודעת וואטסאפ.
+```
+
+הסוכן משתמש בידע זה כדי להנחות את בעלי העסקים בעברית פשוטה, לעדכן את הקבצים ב-S3 עבור כל מספר טלפון, ולהשיב ללקוחות בהתאם לחוקים שנשמרו.
