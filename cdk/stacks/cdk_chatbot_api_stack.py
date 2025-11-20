@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, Optional
 
 DEFAULT_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
-DB_AGENT_DEFAULT_FOUNDATION_MODEL_ID = "anthropic.claude-3-7-sonnet-20250219-v1:0"
+DB_AGENT_DEFAULT_FOUNDATION_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 FALLBACK_AGENT_FOUNDATION_MODEL_ID = "amazon.nova-lite-v1:0"
 MODELS_REQUIRING_INFERENCE_PROFILE = {
     "anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -1753,7 +1753,16 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                 self,
                 "OpenSearchServerlessAccessPolicyDbAgent",
                 name="db-agent-data-access-policy",
-                policy=f'[{{"Description":"Access for bedrock","Rules":[{{"ResourceType":"index","Resource":["index/*/*"],"Permission":["aoss:*"]}},{{"ResourceType":"collection","Resource":["collection/*"],"Permission":["aoss:*"]}}],"Principal":["{db_bedrock_agent_role.role_arn}","{db_bedrock_kb_role.role_arn}","{db_create_index_lambda.role.role_arn}","arn:aws:iam::{self.account}:root"]}}]',
+                policy=f"["
+                f'{{"Description":"Access for bedrock knowledge base and DB agent",'
+                f'"Rules":[{{"ResourceType":"collection","Resource":["collection/{db_opensearch_collection.name}"],'
+                f'"Permission":["aoss:DescribeCollectionItems"]}},'
+                f'{{"ResourceType":"index","Resource":["index/{db_opensearch_collection.name}/*"],'
+                f'"Permission":["aoss:APIAccessAll"]}}],'
+                f'"Principal":["{db_bedrock_agent_role.role_arn}",'
+                f'"{db_bedrock_kb_role.role_arn}",'
+                f'"{db_create_index_lambda.role.role_arn}",'
+                f'"arn:aws:iam::{self.account}:root"]}}]',
                 type="data",
                 description="Data access policy for the DB agent opensearch serverless collection",
             )
