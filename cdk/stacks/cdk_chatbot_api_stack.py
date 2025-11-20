@@ -1496,29 +1496,6 @@ class ChatbotAPIStack(Stack):
             bedrock_knowledge_base.add_dependency(opensearch_serverless_collection)
             bedrock_knowledge_base.node.add_dependency(trigger_lambda_cr)
 
-            db_agent_data_source = aws_bedrock.CfnDataSource(
-                self,
-                "DbBedrockDataSource",
-                name="db-agent-rules",
-                knowledge_base_id=db_agent_knowledge_base.ref,
-                description="S3 data source for DB agent business rules.",
-                data_source_configuration=aws_bedrock.CfnDataSource.DataSourceConfigurationProperty(
-                    type="S3",
-                    s3_configuration=aws_bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
-                        bucket_arn=db_rules_bucket.bucket_arn,
-                        inclusion_prefixes=["business-rules"],
-                    ),
-                ),
-                vector_ingestion_configuration=aws_bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
-                    chunking_configuration=aws_bedrock.CfnDataSource.ChunkingConfigurationProperty(
-                        chunking_strategy="FIXED_SIZE",
-                        fixed_size_chunking_configuration=aws_bedrock.CfnDataSource.FixedSizeChunkingConfigurationProperty(
-                            max_tokens=300, overlap_percentage=20
-                        ),
-                    )
-                ),
-            )
-            bedrock_data_source.node.add_dependency(bedrock_knowledge_base)
 
         foundation_model_identifier = (
             self.bedrock_agent_inference_profile_arn
@@ -1943,12 +1920,12 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                 knowledge_base_id=db_agent_knowledge_base.ref,
                 description="S3 data source for DB agent business rules.",
                 data_source_configuration=aws_bedrock.CfnDataSource.DataSourceConfigurationProperty(
+                    type="S3",
                     s3_configuration=aws_bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
                         bucket_arn=db_rules_bucket.bucket_arn,
                         inclusion_prefixes=["business-rules"],
                     ),
                 ),
-                type="S3",
                 vector_ingestion_configuration=aws_bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
                     chunking_configuration=aws_bedrock.CfnDataSource.ChunkingConfigurationProperty(
                         chunking_strategy="FIXED_SIZE",
