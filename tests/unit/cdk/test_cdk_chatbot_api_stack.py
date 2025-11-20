@@ -47,9 +47,7 @@ def test_user_data_table_exists_with_phone_pk():
                 assertions.Match.object_like(
                     {
                         "IndexName": "UserTypeIndex",
-                        "KeySchema": [
-                            {"AttributeName": "UserType", "KeyType": "HASH"}
-                        ],
+                        "KeySchema": [{"AttributeName": "UserType", "KeyType": "HASH"}],
                     }
                 )
             ],
