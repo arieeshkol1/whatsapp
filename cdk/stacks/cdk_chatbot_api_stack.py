@@ -1885,8 +1885,8 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                         bucket_arn=db_rules_bucket.bucket_arn,
                         inclusion_prefixes=["business-rules"],
                     ),
-                    type="S3",
                 ),
+                type="S3",
                 vector_ingestion_configuration=aws_bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
                     chunking_configuration=aws_bedrock.CfnDataSource.ChunkingConfigurationProperty(
                         chunking_strategy="FIXED_SIZE",
