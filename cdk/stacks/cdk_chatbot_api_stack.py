@@ -9,6 +9,7 @@ MODELS_REQUIRING_INFERENCE_PROFILE = {
 }
 
 USER_DATA_TABLE_DEFAULT_NAME = "UserData"
+USER_DATA_TABLE_USER_TYPE_INDEX_NAME = "UserTypeIndex"
 
 # External imports
 from aws_cdk import (
@@ -146,6 +147,14 @@ class ChatbotAPIStack(Stack):
             ),
             billing_mode=aws_dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        self.user_data_table.add_global_secondary_index(
+            index_name=USER_DATA_TABLE_USER_TYPE_INDEX_NAME,
+            partition_key=aws_dynamodb.Attribute(
+                name="UserType", type=aws_dynamodb.AttributeType.STRING
+            ),
+            projection_type=aws_dynamodb.ProjectionType.ALL,
         )
         Tags.of(self.user_data_table).add("Name", user_data_table_name)
 
