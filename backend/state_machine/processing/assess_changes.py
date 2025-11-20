@@ -12,7 +12,7 @@ The resulting payload is appended to the event so the downstream
 "ProcessText" step can use it without re-querying DynamoDB.
 
 Change log:
-- Include the new "Name" attribute from "UserData" when present.
+- Support a flexible attributes object in "UserData" instead of a single "Name" field.
 - Make DynamoDB resource region-safe for tests/CI (default: us-east-1).
 - Tolerate bad stored PKs (e.g., trailing newline / missing '+') when reading.
 - Canonicalize returned item to strip whitespace from PhoneNumber.
@@ -57,12 +57,75 @@ def _parse_int(value: Optional[str], fallback: int) -> int:
 
 
 def _unwrap_attribute(value: Any) -> Any:
-    """Return the underlying value for simple DynamoDB attribute maps."""
+    """Return the underlying value for DynamoDB attribute maps (recursive)."""
     if isinstance(value, dict):
+        if "M" in value and isinstance(value["M"], dict):
+            return {k: _unwrap_attribute(v) for k, v in value["M"].items()}
+        if "L" in value and isinstance(value["L"], list):
+            return [_unwrap_attribute(v) for v in value["L"]]
         for key in _DYNAMODB_SCALAR_KEYS:
             if key in value:
+                # DynamoDB represents null as {"NULL": True}; normalise to None.
+                if key == "NULL":
+                    return None
                 return value[key]
+        return {k: _unwrap_attribute(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unwrap_attribute(v) for v in value]
     return value
+
+
+def _json_safe_value(value: Any) -> Any:
+    """
+    Convert nested structures into JSON-safe primitives, trimming empty strings.
+    Returns None when the value is not serialisable or is effectively empty.
+    """
+
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed if trimmed else None
+
+    if isinstance(value, (int, float, bool)):
+        return value
+
+    if isinstance(value, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, val in value.items():
+            coerced = _json_safe_value(val)
+            if coerced is not None:
+                cleaned[key] = coerced
+        return cleaned if cleaned else None
+
+    if isinstance(value, list):
+        cleaned_list = [_json_safe_value(entry) for entry in value]
+        cleaned_list = [entry for entry in cleaned_list if entry is not None]
+        return cleaned_list if cleaned_list else None
+
+    return None
+
+
+def _extract_user_name(user_data: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Return a best-effort user name from the flexible attributes map."""
+
+    if not isinstance(user_data, dict):
+        return None
+
+    attributes = user_data.get("Attributes")
+    if isinstance(attributes, dict):
+        parts = []
+        first_name = attributes.get("Name")
+        last_name = attributes.get("FamilyName")
+        for candidate in (first_name, last_name):
+            if isinstance(candidate, str) and candidate.strip():
+                parts.append(candidate.strip())
+        if parts:
+            return " ".join(parts)
+
+    legacy_name = user_data.get("Name")
+    if isinstance(legacy_name, str) and legacy_name.strip():
+        return legacy_name.strip()
+
+    return None
 
 
 def _is_enabled(flag: Optional[str]) -> bool:
@@ -228,15 +291,15 @@ class AssessChanges:
             if user_data_record is not None:
                 payload["user_data"] = user_data_record
                 # Provide a flat "user_name" for convenience in downstream steps.
-                name_value = user_data_record.get("Name")
-                if isinstance(name_value, str) and name_value.strip():
+                name_value = _extract_user_name(user_data_record)
+                if name_value:
                     payload["user_name"] = name_value
                 # Avoid reserved LogRecord keys (e.g., "name")
                 self.logger.debug(
                     "AssessChanges user_data loaded",
                     extra={
                         "ctx_phone": normalized_phone,
-                        "ctx_user_name": user_data_record.get("Name"),
+                        "ctx_user_name": name_value,
                     },
                 )
             if conversation_items:
@@ -363,8 +426,16 @@ class AssessChanges:
 
     # ------------------------------------------------------------------
     def _determine_user_type(self, user_data: Optional[Dict[str, Any]]) -> str:
-        if isinstance(user_data, dict) and user_data.get("Name"):
+        if not isinstance(user_data, dict):
+            return "new_customer"
+
+        if _extract_user_name(user_data):
             return "existing_customer"
+
+        attributes = user_data.get("Attributes")
+        if isinstance(attributes, dict) and attributes:
+            return "existing_customer"
+
         return "new_customer"
 
     # ------------------------------------------------------------------
@@ -383,11 +454,9 @@ class AssessChanges:
             context["business_number"] = destination_number
 
         if isinstance(user_data, dict) and user_data:
-            context["user_data"] = {
-                key: value
-                for key, value in user_data.items()
-                if isinstance(value, (str, int, float, bool))
-            }
+            sanitized_user_data = _json_safe_value(user_data)
+            if isinstance(sanitized_user_data, dict) and sanitized_user_data:
+                context["user_data"] = sanitized_user_data
 
         if conversation_items:
             recent: List[Dict[str, Any]] = []
@@ -509,9 +578,9 @@ class AssessChanges:
         """
         Retrieve user data by phone number from the UserData table.
 
-        Since DynamoDB items are schemaless for non-key attributes, if the "Name"
-        attribute exists for the item, it will be returned as part of the full item.
-        This method also tolerates bad stored keys (trailing newline / missing '+').
+        Since DynamoDB items are schemaless for non-key attributes, a flexible
+        "Attributes" map is returned as part of the full item when present. This
+        method also tolerates bad stored keys (trailing newline / missing '+').
         """
         if not self._user_data_table_name:
             return None
@@ -560,6 +629,13 @@ class AssessChanges:
         pn = item.get("PhoneNumber")
         if isinstance(pn, str):
             item["PhoneNumber"] = pn.strip()
+        attributes = item.get("Attributes")
+        if isinstance(attributes, dict):
+            cleaned_attributes = _json_safe_value(attributes)
+            if isinstance(cleaned_attributes, dict) and cleaned_attributes:
+                item["Attributes"] = cleaned_attributes
+            else:
+                item.pop("Attributes", None)
         name_val = item.get("Name")
         if isinstance(name_val, str) and not name_val.strip():
             # Normalise empty strings to missing to avoid confusing downstream checks.
