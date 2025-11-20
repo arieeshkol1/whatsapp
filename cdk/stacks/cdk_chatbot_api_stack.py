@@ -1243,6 +1243,9 @@ class ChatbotAPIStack(Stack):
 
         # Create the S3 bucket for uploading the KB assets
         if self.enable_rag:
+            enable_bedrock_knowledge = self.app_config.get(
+                "enable_bedrock_knowledge", True
+            )
             s3_bucket_kb = aws_s3.Bucket(
                 self,
                 "S3-KB",
