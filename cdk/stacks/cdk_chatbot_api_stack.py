@@ -1,4 +1,5 @@
 # Built-in imports
+import json
 import os
 from typing import Any, Dict, Optional
 
@@ -1749,25 +1750,68 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                 )
             )
 
-            db_opensearch_access_policy = oss.CfnAccessPolicy(
+            db_opensearch_collection_access_policy = oss.CfnAccessPolicy(
                 self,
-                "OpenSearchServerlessAccessPolicyDbAgent",
-                name="db-agent-data-access-policy",
-                policy=f"["
-                f'{{"Description":"Access for bedrock knowledge base and DB agent",'
-                f'"Rules":[{{"ResourceType":"collection","Resource":["collection/{db_opensearch_collection.name}"],'
-                f'"Permission":["aoss:DescribeCollectionItems"]}},'
-                f'{{"ResourceType":"index","Resource":["index/{db_opensearch_collection.name}/*"],'
-                f'"Permission":["aoss:APIAccessAll"]}}],'
-                f'"Principal":["{db_bedrock_agent_role.role_arn}",'
-                f'"{db_bedrock_kb_role.role_arn}",'
-                f'"{db_create_index_lambda.role.role_arn}",'
-                f'"arn:aws:iam::{self.account}:root"]}}]',
+                "OpenSearchServerlessCollectionAccessPolicyDbAgent",
+                name="db-agent-collection-access-policy",
+                policy=json.dumps(
+                    [
+                        {
+                            "Description": "Describe access for DB agent collection",
+                            "Rules": [
+                                {
+                                    "ResourceType": "collection",
+                                    "Resource": [
+                                        f"collection/{db_opensearch_collection.name}"
+                                    ],
+                                    "Permission": ["aoss:DescribeCollectionItems"],
+                                }
+                            ],
+                            "Principal": [
+                                db_bedrock_agent_role.role_arn,
+                                db_bedrock_kb_role.role_arn,
+                                db_create_index_lambda.role.role_arn,
+                                f"arn:aws:iam::{self.account}:root",
+                            ],
+                        }
+                    ]
+                ),
                 type="data",
-                description="Data access policy for the DB agent opensearch serverless collection",
+                description="Collection access policy for the DB agent opensearch serverless collection",
             )
 
-            db_opensearch_collection.add_dependency(db_opensearch_access_policy)
+            db_opensearch_index_access_policy = oss.CfnAccessPolicy(
+                self,
+                "OpenSearchServerlessIndexAccessPolicyDbAgent",
+                name="db-agent-index-access-policy",
+                policy=json.dumps(
+                    [
+                        {
+                            "Description": "Index access for DB agent",
+                            "Rules": [
+                                {
+                                    "ResourceType": "index",
+                                    "Resource": [
+                                        f"index/{db_opensearch_collection.name}/*"
+                                    ],
+                                    "Permission": ["aoss:APIAccessAll"],
+                                }
+                            ],
+                            "Principal": [
+                                db_bedrock_agent_role.role_arn,
+                                db_bedrock_kb_role.role_arn,
+                                db_create_index_lambda.role.role_arn,
+                                f"arn:aws:iam::{self.account}:root",
+                            ],
+                        }
+                    ]
+                ),
+                type="data",
+                description="Index access policy for the DB agent opensearch serverless collection",
+            )
+
+            db_opensearch_collection.add_dependency(db_opensearch_collection_access_policy)
+            db_opensearch_collection.add_dependency(db_opensearch_index_access_policy)
 
             db_aoss_lambda_params = {
                 "FunctionName": db_create_index_lambda.function_name,
