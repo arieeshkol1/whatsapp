@@ -273,6 +273,97 @@ class DynamoDBHelper:
             )
             raise
 
+    def update_system_response(
+        self,
+        partition_keys: List[str],
+        whatsapp_id: str,
+        system_response: Dict[str, Any],
+        full_response: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Attach system response metadata to a stored message.
+
+        Tries the provided partition key candidates in order until a matching
+        message is found.
+        """
+
+        if not whatsapp_id or not system_response:
+            return
+
+        for partition_key in partition_keys:
+            if not partition_key:
+                continue
+
+            try:
+                response = self.table.query(
+                    KeyConditionExpression=Key("PK").eq(partition_key),
+                    FilterExpression=Attr("whatsapp_id").eq(whatsapp_id),
+                    Limit=1,
+                    ScanIndexForward=False,
+                )
+            except ClientError as error:
+                logger.error(
+                    "Failed to query message for system response attachment",
+                    extra={
+                        "table_name": self.table_name,
+                        "pk": partition_key,
+                        "whatsapp_id": whatsapp_id,
+                        "error": str(error),
+                    },
+                )
+                continue
+
+            items = response.get("Items") if isinstance(response, dict) else None
+            if not items:
+                continue
+
+            sort_key = items[0].get("SK")
+            if not isinstance(sort_key, str):
+                continue
+
+            try:
+                update_parts = ["system_response = :system_response"]
+                expression_attribute_values: Dict[str, Any] = {
+                    ":system_response": system_response
+                }
+                expression_attribute_names: Optional[Dict[str, str]] = None
+
+                if full_response is not None:
+                    update_parts.extend(
+                        ["#response = :response", "#system_response_full = :response"]
+                    )
+                    expression_attribute_values[":response"] = full_response
+                    expression_attribute_names = {
+                        "#response": "Response",
+                        "#system_response_full": "System_Response",
+                    }
+
+                update_expression = "SET " + ", ".join(update_parts)
+
+                update_kwargs: Dict[str, Any] = {
+                    "Key": {"PK": partition_key, "SK": sort_key},
+                    "UpdateExpression": update_expression,
+                    "ExpressionAttributeValues": expression_attribute_values,
+                }
+                if expression_attribute_names:
+                    update_kwargs[
+                        "ExpressionAttributeNames"
+                    ] = expression_attribute_names
+
+                self.table.update_item(**update_kwargs)
+                return
+            except ClientError as error:
+                logger.error(
+                    "Failed to update system response",
+                    extra={
+                        "table_name": self.table_name,
+                        "pk": partition_key,
+                        "sk": sort_key,
+                        "whatsapp_id": whatsapp_id,
+                        "error": str(error),
+                    },
+                )
+                continue
+
     def get_customer_profile(
         self, normalized_phone: str, sort_key: str
     ) -> Optional[Dict[str, Any]]:
