@@ -1496,16 +1496,16 @@ class ChatbotAPIStack(Stack):
             bedrock_knowledge_base.add_dependency(opensearch_serverless_collection)
             bedrock_knowledge_base.node.add_dependency(trigger_lambda_cr)
 
-            bedrock_data_source = aws_bedrock.CfnDataSource(
+            db_agent_data_source = aws_bedrock.CfnDataSource(
                 self,
-                "Bedrock-DataSource",
-                name="KbDataSource",
-                knowledge_base_id=bedrock_knowledge_base.ref,
-                description="The S3 data source definition for the bedrock knowledge base containing information about projects.",
+                "DbBedrockDataSource",
+                name="db-agent-rules",
+                knowledge_base_id=db_agent_knowledge_base.ref,
+                description="S3 data source for DB agent business rules.",
                 data_source_configuration=aws_bedrock.CfnDataSource.DataSourceConfigurationProperty(
                     type="S3",
                     s3_configuration=aws_bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
-                        bucket_arn=s3_bucket_kb.bucket_arn,
+                        bucket_arn=db_rules_bucket.bucket_arn,
                         inclusion_prefixes=["business-rules"],
                     ),
                 ),
