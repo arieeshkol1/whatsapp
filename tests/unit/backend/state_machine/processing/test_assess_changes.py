@@ -39,6 +39,14 @@ def test_determine_user_type_accepts_attributes_map():
     assert processor._determine_user_type(user_data) == "existing_customer"
 
 
+def test_normalize_user_type_defaults_to_consumer():
+    module = _load_module()
+
+    assert module._normalize_user_type(None) == "C"
+    assert module._normalize_user_type(" ") == "C"
+    assert module._normalize_user_type("b") == "B"
+
+
 def test_json_safe_value_preserves_nested_attributes():
     module = _load_module()
 
