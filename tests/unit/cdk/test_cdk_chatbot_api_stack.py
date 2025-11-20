@@ -43,6 +43,20 @@ def test_user_data_table_exists_with_phone_pk():
         {
             "TableName": "UserData",
             "KeySchema": [{"AttributeName": "PhoneNumber", "KeyType": "HASH"}],
+            "GlobalSecondaryIndexes": [
+                assertions.Match.object_like(
+                    {
+                        "IndexName": "UserTypeIndex",
+                        "KeySchema": [{"AttributeName": "UserType", "KeyType": "HASH"}],
+                    }
+                )
+            ],
+            "AttributeDefinitions": assertions.Match.array_with(
+                [
+                    {"AttributeName": "PhoneNumber", "AttributeType": "S"},
+                    {"AttributeName": "UserType", "AttributeType": "S"},
+                ]
+            ),
         },
     )
 
