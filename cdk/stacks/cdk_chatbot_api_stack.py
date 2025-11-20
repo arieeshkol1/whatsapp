@@ -978,10 +978,6 @@ class ChatbotAPIStack(Stack):
         self.choice_voice_v2 = aws_sfn.Condition.string_equals(
             "$.message_type", "voice"
         )
-        self.assess_changes_enabled_condition = aws_sfn.Condition.string_equals(
-            "$.features.assess_changes",
-            "on",
-        )
 
         self.state_machine_definition_v2 = self.v2_task_adapt_input.next(
             self.v2_task_adapt_message.next(
@@ -995,18 +991,9 @@ class ChatbotAPIStack(Stack):
             )
         )
 
-        self.v2_choice_assess_changes = aws_sfn.Choice(
-            self,
-            "Enrich Message Enabled?",
-            comment="Routes through AssessChanges when feature flag is enabled",
+        self.v2_task_pass_text.next(
+            self.v2_task_assess_changes.next(self.v2_task_process_text)
         )
-        self.v2_choice_assess_changes.when(
-            self.assess_changes_enabled_condition,
-            self.v2_task_assess_changes.next(self.v2_task_process_text),
-        )
-        self.v2_choice_assess_changes.otherwise(self.v2_task_process_text)
-
-        self.v2_task_pass_text.next(self.v2_choice_assess_changes)
 
         self.v2_task_process_text.next(self.v2_task_send_message)
 
@@ -1122,6 +1109,11 @@ class ChatbotAPIStack(Stack):
         PATH_TO_KB_FOLDER = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "knowledge_base",
+        )
+        PATH_TO_DB_AGENT_KB_FOLDER = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "knowledge_base",
+            "db_agent",
         )
         PATH_TO_CUSTOM_RESOURCES = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
