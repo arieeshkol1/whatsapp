@@ -100,6 +100,32 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     return stripped
 
 
+def _history_partition_keys(from_number: Optional[str]) -> List[str]:
+    """Return candidate partition keys for interaction history lookups."""
+
+    if from_number is None:
+        return []
+
+    raw = str(from_number).strip()
+    if not raw:
+        return []
+
+    without_prefix = raw.split("NUMBER#", maxsplit=1)[-1]
+    digits_only = "".join(ch for ch in without_prefix if ch.isdigit())
+    base = digits_only or without_prefix.lstrip("+")
+
+    candidates: List[str] = []
+    for candidate in (base, without_prefix, without_prefix.lstrip("+")):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    legacy = f"NUMBER#{base}" if base else None
+    if legacy and legacy not in candidates:
+        candidates.append(legacy)
+
+    return candidates
+
+
 def _get_users_info_table():
     global _users_info_table
 
@@ -460,16 +486,24 @@ def _fetch_conversation_history(from_number: str, conversation_id: int) -> List[
     if not _history_helper or not from_number or conversation_id < 1:
         return []
 
-    partition_key = f"NUMBER#{from_number}"
-    try:
-        return _history_helper.query_by_conversation(
-            partition_key=partition_key,
-            conversation_id=conversation_id,
-            limit=CONVERSATION_HISTORY_LIMIT,
-        )
-    except Exception:  # pragma: no cover - defensive logging
-        logger.exception("Failed to fetch conversation history")
-        return []
+    for partition_key in _history_partition_keys(from_number):
+        try:
+            history_items = _history_helper.query_by_conversation(
+                partition_key=partition_key,
+                conversation_id=conversation_id,
+                limit=CONVERSATION_HISTORY_LIMIT,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception(
+                "Failed to fetch conversation history",
+                extra={"partition_key": partition_key},
+            )
+            continue
+
+        if history_items:
+            return history_items
+
+    return []
 
 
 def _format_history_messages(items: List[dict], current_whatsapp_id: str) -> List[str]:
@@ -542,21 +576,25 @@ class ProcessText(BaseStepFunction):
         stored_user_profile = _load_user_info_profile(from_number)
         user_profile_context = _format_user_info_for_context(stored_user_profile)
 
-        partition_key = f"NUMBER#{from_number}" if from_number else None
+        partition_keys = _history_partition_keys(from_number)
+        primary_partition_key = partition_keys[0] if partition_keys else None
         conversation_state: Dict[str, Any] = {}
         prompt_state: Dict[str, Any] = {}
         conversation_state_dirty = False
 
-        if partition_key and _history_helper:
-            try:
-                stored_state = _history_helper.get_conversation_state(
-                    partition_key, conversation_id
-                )
-                if isinstance(stored_state, dict):
-                    conversation_state = stored_state
-                    prompt_state = dict(stored_state)
-            except Exception:  # pragma: no cover - defensive logging
-                logger.exception("Failed to fetch conversation state")
+        if _history_helper:
+            for partition_key in partition_keys:
+                try:
+                    stored_state = _history_helper.get_conversation_state(
+                        partition_key, conversation_id
+                    )
+                    if isinstance(stored_state, dict):
+                        conversation_state = stored_state
+                        prompt_state = dict(stored_state)
+                        primary_partition_key = partition_key
+                        break
+                except Exception:  # pragma: no cover - defensive logging
+                    logger.exception("Failed to fetch conversation state")
 
         user_info_details = _load_user_info_details(from_number)
         if user_info_details:
@@ -646,6 +684,7 @@ class ProcessText(BaseStepFunction):
         )
 
         reply_text = raw_response or ""
+        system_response_metadata: Optional[Dict[str, Any]] = None
         profile_updates: Dict[str, Any] = {}
         conversation_tag_updates: Dict[str, Any] = {}
         user_update_entries: List[Dict[str, Any]] = []
@@ -663,6 +702,11 @@ class ProcessText(BaseStepFunction):
                     candidate_reply = parsed.get("reply")
                     if isinstance(candidate_reply, str):
                         reply_text = candidate_reply
+                        metadata_candidate = parsed.get("metadata") or parsed.get(
+                            "Metadata"
+                        )
+                        if isinstance(metadata_candidate, dict):
+                            system_response_metadata = metadata_candidate
                     else:
                         self.logger.warning(
                             "Bedrock response missing string reply",
@@ -683,6 +727,9 @@ class ProcessText(BaseStepFunction):
                     )
 
         self.response_message = unescape(reply_text)
+        system_response: Dict[str, Any] = {"text": self.response_message}
+        if system_response_metadata:
+            system_response["metadata"] = system_response_metadata
 
         if profile_updates or conversation_tag_updates:
             if profile_updates:
@@ -701,15 +748,23 @@ class ProcessText(BaseStepFunction):
 
         _update_user_info_details(from_number, prompt_state, last_seen_at)
 
-        if conversation_state_dirty and partition_key and _history_helper:
+        if conversation_state_dirty and primary_partition_key and _history_helper:
             try:
                 _history_helper.put_conversation_state(
-                    partition_key,
+                    primary_partition_key,
                     conversation_id,
                     conversation_state,
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
+
+        if _history_helper and current_whatsapp_id:
+            try:
+                _history_helper.update_system_response(
+                    partition_keys, current_whatsapp_id, system_response
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                logger.exception("Failed to attach system response to history item")
 
         final_order_progress_summary = format_order_progress_summary(prompt_state)
 
@@ -728,6 +783,7 @@ class ProcessText(BaseStepFunction):
         if final_order_progress_summary:
             self.event["order_progress_summary"] = final_order_progress_summary
         self.event["conversation_state"] = conversation_state
+        self.event["system_response"] = system_response
         if user_update_entries:
             self.event["user_updates"] = user_update_entries
 

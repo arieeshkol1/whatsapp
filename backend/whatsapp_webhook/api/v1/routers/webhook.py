@@ -131,7 +131,7 @@ async def post_chatbot_webhook(
             )
 
             message_item = TextMessageModel(
-                PK=f"NUMBER#{normalized_from_number}",
+                PK=normalized_from_number,
                 SK=f"MESSAGE#{created_at}",
                 from_number=wpp_from_phone_number,
                 created_at=created_at,
@@ -192,8 +192,12 @@ def _extract_conversation_id_value(raw_value) -> int:
 def _determine_conversation_id(phone_number: str, created_at: datetime) -> int:
     """Determine the conversation id for the incoming message."""
 
-    partition_key = f"NUMBER#{phone_number}"
-    latest_item = dynamodb_helper.get_latest_item_by_pk(partition_key)
+    partition_keys = [phone_number, f"NUMBER#{phone_number}"]
+    latest_item = None
+    for partition_key in partition_keys:
+        latest_item = dynamodb_helper.get_latest_item_by_pk(partition_key)
+        if latest_item:
+            break
     if not latest_item:
         return 1
 

@@ -7,7 +7,7 @@ class TextMessageModel(MessageBaseModel):
     All additional attributes are inherited from the MessageBaseModel.
 
     Attributes:
-        PK: str: Primary Key for the DynamoDB item (NUMBER#<phone_number>)
+        PK: str: Primary Key for the DynamoDB item (<phone_number>)
         SK: str: Sort Key for the DynamoDB item (MESSAGE#<datetime>)
         from_number: str: Phone number of the sender.
         created_at: str: Creation datetime of the message.
