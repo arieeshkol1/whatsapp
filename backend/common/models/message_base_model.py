@@ -7,7 +7,7 @@ class MessageBaseModel(BaseModel):
     Class that represents a Chat Message item (Base Model).
 
     Attributes:
-        PK: str: Primary Key for the DynamoDB item (NUMBER#<phone_number>)
+        PK: str: Primary Key for the DynamoDB item (<phone_number>)
         SK: str: Sort Key for the DynamoDB item (MESSAGE#<datetime>)
         from_number: str: Phone number of the sender.
         created_at: str: Creation datetime of the message.
@@ -19,7 +19,7 @@ class MessageBaseModel(BaseModel):
             message belongs to.
     """
 
-    PK: str = Field(pattern=r"^NUMBER#\d{10,13}$")
+    PK: str = Field(pattern=r"^\d{10,13}$")
     SK: str = Field(pattern=r"^MESSAGE#")
     created_at: str
     from_number: str
