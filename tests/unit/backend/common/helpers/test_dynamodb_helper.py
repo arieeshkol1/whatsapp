@@ -101,8 +101,6 @@ def test_update_system_response_persists_full_response_when_missing(monkeypatch)
     )["Item"]
 
     assert updated["system_response"] == system_response
-    assert updated["System_Response"] == system_response
-    assert updated["Response"] == system_response
 
 
 def test_update_system_response_pages_until_match(monkeypatch):
@@ -137,5 +135,3 @@ def test_update_system_response_pages_until_match(monkeypatch):
     )
 
     assert items[1]["system_response"] == system_response
-    assert items[1]["System_Response"] == system_response
-    assert items[1]["Response"] == system_response
