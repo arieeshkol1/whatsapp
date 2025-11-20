@@ -6,13 +6,10 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-RULES_BUCKET = os.environ.get("RULES_BUCKET")
-RULES_PREFIX = os.environ.get("RULES_PREFIX", "rules/")
 USER_DATA_TABLE = os.environ.get("USER_DATA_TABLE")
 INTERACTION_TABLE = os.environ.get("INTERACTION_TABLE")
 
 dynamodb = boto3.resource("dynamodb")
-s3 = boto3.client("s3")
 
 
 def _get_param(parameters: List[Dict[str, Any]], name: str) -> Optional[str]:
@@ -84,42 +81,6 @@ def _stringify_items(items: List[Dict[str, Any]]) -> List[str]:
     return results
 
 
-def action_group_update_business_rules(parameters: List[Dict[str, Any]]) -> List[str]:
-    rule_id = _get_param(parameters, "rule_id")
-    content = _get_param(parameters, "content")
-    metadata_raw = _get_param(parameters, "metadata")
-
-    if not RULES_BUCKET or not rule_id or not content:
-        return [
-            "Missing required configuration or parameters to update business rules."
-        ]
-
-    metadata: Optional[Dict[str, Any]] = None
-    if metadata_raw:
-        try:
-            metadata = json.loads(metadata_raw)
-            if not isinstance(metadata, dict):
-                metadata = {"metadata": metadata_raw}
-        except json.JSONDecodeError:
-            metadata = {"metadata": metadata_raw}
-
-    key = f"{RULES_PREFIX}{rule_id}.json"
-    payload: Dict[str, Any] = {"rule_id": rule_id, "content": content}
-    if metadata:
-        payload["metadata"] = metadata
-
-    s3.put_object(
-        Bucket=RULES_BUCKET,
-        Key=key,
-        Body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-    )
-
-    return [
-        f"Stored rule {rule_id} at {key}",
-        json.dumps(payload, ensure_ascii=False),
-    ]
-
-
 def action_group_query_user_data(parameters: List[Dict[str, Any]]) -> List[str]:
     phone_number = _get_param(parameters, "phone_number")
     if not phone_number:
@@ -150,9 +111,7 @@ def lambda_handler(event, context):
     _function = event.get("function")
     parameters = event.get("parameters", [])
 
-    if action_group == "UpdateBusinessRules":
-        results = action_group_update_business_rules(parameters)
-    elif action_group == "QueryUserData":
+    if action_group == "QueryUserData":
         results = action_group_query_user_data(parameters)
     elif action_group == "QueryInteractionHistory":
         results = action_group_query_interaction_history(parameters)
