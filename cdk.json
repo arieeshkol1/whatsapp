@@ -25,6 +25,11 @@
         "bedrock_agent_alias_id": "TSTALIASID",
         "bedrock_agent_foundation_model_id": "amazon.nova-lite-v1:0",
         "bedrock_agent_inference_profile_arn": null,
+        "enable_db_agent": true,
+        "db_agent_id": null,
+        "db_agent_alias_id": null,
+        "db_agent_foundation_model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "db_agent_inference_profile_arn": null,
         "ASSESS_CHANGES_FEATURE": "off",
         "RULES_TABLE": "aws-whatsapp-rules-dev"
       },
@@ -45,6 +50,11 @@
         "bedrock_agent_alias_id": null,
         "bedrock_agent_foundation_model_id": "amazon.nova-lite-v1:0",
         "bedrock_agent_inference_profile_arn": null,
+        "enable_db_agent": true,
+        "db_agent_id": null,
+        "db_agent_alias_id": null,
+        "db_agent_foundation_model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "db_agent_inference_profile_arn": null,
         "ASSESS_CHANGES_FEATURE": "off",
         "RULES_TABLE": "aws-whatsapp-rules-prod"
       }
