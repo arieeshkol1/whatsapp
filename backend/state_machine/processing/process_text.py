@@ -730,10 +730,16 @@ class ProcessText(BaseStepFunction):
                     )
                     bedrock_response_json = {"raw_response": parsed}
 
+        # Build canonical system_response
         self.response_message = unescape(reply_text)
-        system_response: Dict[str, Any] = {"text": self.response_message}
+        system_response: Dict[str, Any] = {
+            "text": self.response_message,
+        }
         if system_response_metadata:
             system_response["metadata"] = system_response_metadata
+        if user_update_entries:
+            # canonical: include user_updates inside system_response
+            system_response["user_updates"] = user_update_entries
 
         if profile_updates or conversation_tag_updates:
             if profile_updates:
@@ -793,6 +799,7 @@ class ProcessText(BaseStepFunction):
         self.event["system_response"] = system_response
         if bedrock_response_json:
             self.event["bedrock_response"] = bedrock_response_json
+        # Keep top-level user_updates for backward compatibility (optional)
         if user_update_entries:
             self.event["user_updates"] = user_update_entries
 
