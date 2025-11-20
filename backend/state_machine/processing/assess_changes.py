@@ -182,14 +182,20 @@ def _conversation_key_variants(e164: str) -> List[str]:
     if not base:
         return variants
 
-    def _append_variant(phone: str) -> None:
-        key = f"NUMBER#{phone}"
-        if key not in variants:
-            variants.append(key)
+    digits_only = "".join(ch for ch in base if ch.isdigit())
 
-    _append_variant(base)
-    if base.startswith("+"):
-        _append_variant(base[1:])
+    def _append_variant(phone: str) -> None:
+        if phone and phone not in variants:
+            variants.append(phone)
+
+    for candidate in (digits_only, base, base.lstrip("+")):
+        _append_variant(candidate)
+
+    # Legacy prefixed keys kept for backwards compatibility during migration
+    for candidate in list(variants):
+        prefixed = f"NUMBER#{candidate}"
+        if prefixed not in variants:
+            variants.append(prefixed)
 
     return variants
 

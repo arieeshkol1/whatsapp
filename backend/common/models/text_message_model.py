@@ -1,4 +1,7 @@
-from common.models.message_base_model import MessageBaseModel
+from common.models.message_base_model import (
+    MessageBaseModel,
+    _deserialize_attribute,
+)
 
 
 class TextMessageModel(MessageBaseModel):
@@ -7,7 +10,7 @@ class TextMessageModel(MessageBaseModel):
     All additional attributes are inherited from the MessageBaseModel.
 
     Attributes:
-        PK: str: Primary Key for the DynamoDB item (NUMBER#<phone_number>)
+        PK: str: Primary Key for the DynamoDB item (<phone_number>)
         SK: str: Sort Key for the DynamoDB item (MESSAGE#<datetime>)
         from_number: str: Phone number of the sender.
         created_at: str: Creation datetime of the message.
@@ -36,5 +39,12 @@ class TextMessageModel(MessageBaseModel):
             correlation_id=dynamodb_item.get("correlation_id", {}).get("S"),
             conversation_id=int(
                 dynamodb_item.get("conversation_id", {}).get("N", "1") or 1
+            ),
+            system_response=_deserialize_attribute(
+                dynamodb_item.get("system_response")
+            ),
+            Response=_deserialize_attribute(dynamodb_item.get("Response")),
+            System_Response=_deserialize_attribute(
+                dynamodb_item.get("System_Response") or dynamodb_item.get("Response")
             ),
         )
