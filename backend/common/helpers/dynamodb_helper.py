@@ -335,36 +335,17 @@ class DynamoDBHelper:
                 continue
 
             try:
-                update_parts = ["system_response = :system_response"]
+                canonical_response = full_response or system_response
+                update_expression = "SET system_response = :system_response"
                 expression_attribute_values: Dict[str, Any] = {
-                    ":system_response": system_response
+                    ":system_response": canonical_response
                 }
-
-                full_response_payload = full_response or system_response
-
-                expression_attribute_names: Optional[Dict[str, str]] = None
-
-                if full_response_payload is not None:
-                    update_parts.extend(
-                        ["#response = :response", "#system_response_full = :response"]
-                    )
-                    expression_attribute_values[":response"] = full_response_payload
-                    expression_attribute_names = {
-                        "#response": "Response",
-                        "#system_response_full": "System_Response",
-                    }
-
-                update_expression = "SET " + ", ".join(update_parts)
 
                 update_kwargs: Dict[str, Any] = {
                     "Key": {"PK": partition_key, "SK": sort_key},
                     "UpdateExpression": update_expression,
                     "ExpressionAttributeValues": expression_attribute_values,
                 }
-                if expression_attribute_names:
-                    update_kwargs[
-                        "ExpressionAttributeNames"
-                    ] = expression_attribute_names
 
                 self.table.update_item(**update_kwargs)
                 return

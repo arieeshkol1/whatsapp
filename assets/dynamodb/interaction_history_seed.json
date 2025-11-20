@@ -11,25 +11,12 @@
     "whatsapp_id": "wamid.sample",
     "whatsapp_timestamp": "1763634291",
     "system_response": {
-      "text": "Hello from seed item"
-    },
-    "Response": {
-      "reply": "Hello from Bedrock seed",
-      "metadata": {
-        "model": "amazon.nova-lite-v1:0",
-        "finish_reason": "stop"
-      }
-    },
-    "System_Response": {
       "reply": "Hello from Bedrock seed",
       "metadata": {
         "model": "amazon.nova-lite-v1:0",
         "finish_reason": "stop"
       },
-      "Bedrock_Response": {
-        "reply": "Hello from Bedrock seed",
-        "user_updates": []
-      }
+      "user_updates": []
     }
   }
 ]
