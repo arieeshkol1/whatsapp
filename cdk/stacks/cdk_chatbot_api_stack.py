@@ -1810,10 +1810,11 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                 description="Index access policy for the DB agent opensearch serverless collection",
             )
 
-            db_opensearch_collection.add_dependency(
-                db_opensearch_collection_access_policy
-            )
-            db_opensearch_collection.add_dependency(db_opensearch_index_access_policy)
+            for dependency in (
+                db_opensearch_collection_access_policy,
+                db_opensearch_index_access_policy,
+            ):
+                db_opensearch_collection.add_dependency(dependency)
 
             db_aoss_lambda_params = {
                 "FunctionName": db_create_index_lambda.function_name,
