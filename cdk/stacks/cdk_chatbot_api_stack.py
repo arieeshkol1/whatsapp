@@ -86,9 +86,11 @@ class ChatbotAPIStack(Stack):
         self.db_agent_inference_profile_arn = self.app_config.get(
             "db_agent_inference_profile_arn"
         )
-        self.db_agent_effective_foundation_model_id = self._resolve_bedrock_foundation_model_id(
-            self.db_agent_foundation_model_id,
-            self.db_agent_inference_profile_arn,
+        self.db_agent_effective_foundation_model_id = (
+            self._resolve_bedrock_foundation_model_id(
+                self.db_agent_foundation_model_id,
+                self.db_agent_inference_profile_arn,
+            )
         )
 
         # Placeholder for optional resources initialised in later steps

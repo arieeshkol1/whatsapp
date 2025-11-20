@@ -49,7 +49,9 @@ def _query_interaction_table(
     return items
 
 
-def _get_user_data(table_name: Optional[str], phone_number: str) -> List[Dict[str, Any]]:
+def _get_user_data(
+    table_name: Optional[str], phone_number: str
+) -> List[Dict[str, Any]]:
     if not table_name:
         return []
 
@@ -129,7 +131,9 @@ def action_group_query_user_data(parameters: List[Dict[str, Any]]) -> List[str]:
     return _stringify_items(items)
 
 
-def action_group_query_interaction_history(parameters: List[Dict[str, Any]]) -> List[str]:
+def action_group_query_interaction_history(
+    parameters: List[Dict[str, Any]]
+) -> List[str]:
     partition_key = _get_param(parameters, "partition_key")
     sort_key_prefix = _get_param(parameters, "sort_key_prefix") or ""
     if not partition_key:
