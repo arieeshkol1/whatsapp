@@ -1,0 +1,35 @@
+[
+  {
+    "PK": "972524347196",
+    "SK": "MESSAGE#2025-11-20T10:00:00Z",
+    "conversation_id": 1,
+    "correlation_id": "seed-correlation-id",
+    "created_at": "2025-11-20T10:00:00Z",
+    "from_number": "972524347196",
+    "text": "sample message",
+    "type": "text",
+    "whatsapp_id": "wamid.sample",
+    "whatsapp_timestamp": "1763634291",
+    "system_response": {
+      "text": "Hello from seed item"
+    },
+    "Response": {
+      "reply": "Hello from Bedrock seed",
+      "metadata": {
+        "model": "amazon.nova-lite-v1:0",
+        "finish_reason": "stop"
+      }
+    },
+    "System_Response": {
+      "reply": "Hello from Bedrock seed",
+      "metadata": {
+        "model": "amazon.nova-lite-v1:0",
+        "finish_reason": "stop"
+      },
+      "Bedrock_Response": {
+        "reply": "Hello from Bedrock seed",
+        "user_updates": []
+      }
+    }
+  }
+]
