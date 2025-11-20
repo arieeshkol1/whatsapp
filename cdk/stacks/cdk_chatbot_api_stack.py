@@ -363,6 +363,7 @@ class ChatbotAPIStack(Stack):
             "SECRET_NAME": self.app_config["secret_name"],
             "META_ENDPOINT": self.app_config["meta_endpoint"],
             "ASSESS_CHANGES_FEATURE": "true",
+            "DYNAMODB_TABLE": "Interaction-history",
             "USER_DATA_TABLE": self.app_config.get(
                 "USER_DATA_TABLE",
                 (
