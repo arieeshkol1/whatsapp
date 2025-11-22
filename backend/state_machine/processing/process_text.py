@@ -246,7 +246,7 @@ def _update_user_info_profile(
         return
 
     expression_names = {
-        "#info": USER_INFO_ATTRIBUTE,  # ADD THIS
+        "#info": USER_INFO_ATTRIBUTE,
         "#details": USER_INFO_ATTRIBUTE,
         "#profile": PROFILE_ATTRIBUTE,
         "#collected": COLLECTED_FIELDS_ATTRIBUTE,
@@ -258,7 +258,7 @@ def _update_user_info_profile(
         ":last_seen": _as_epoch_decimal(last_seen_at),
     }
     set_fragments = [
-        "#info = if_not_exists(#info, :empty)",  # ADD THIS
+        "#info = if_not_exists(#info, :empty)",
         "#details = if_not_exists(#details, :empty)",
         "Details = if_not_exists(Details, :empty)",
         "#profile = if_not_exists(#profile, :empty)",
@@ -288,7 +288,7 @@ def _update_user_info_profile(
             profile_tokens.append(token)
 
         profile_path = ".".join(profile_tokens)
-        set_fragments.append(f"#info.{profile_path} = {value_token}")  # ADD THIS
+        set_fragments.append(f"#info.{profile_path} = {value_token}")
         set_fragments.append(f"#details.{profile_path} = {value_token}")
         set_fragments.append(f"#profile.{profile_path} = {value_token}")
         set_fragments.append(f"#collected.{profile_path} = :true")
@@ -525,6 +525,49 @@ def _format_history_messages(items: List[dict], current_whatsapp_id: str) -> Lis
     return history_lines
 
 
+def _parse_bedrock_json(raw: Optional[Any]) -> Optional[Dict[str, Any]]:
+    """
+    Best-effort JSON parsing for Bedrock responses.
+
+    Handles:
+    - Proper JSON objects.
+    - Double-encoded JSON strings (string whose *content* is JSON).
+
+    Returns:
+        dict on success, or None on failure.
+    """
+    if raw is None:
+        return None
+
+    if not isinstance(raw, str):
+        try:
+            raw = raw.decode("utf-8")  # type: ignore[arg-type]
+        except Exception:
+            raw = str(raw)
+
+    raw = raw.strip()
+    if not raw:
+        return None
+
+    # First attempt
+    try:
+        parsed: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    # If Bedrock wrapped JSON as a string, decode one more time:
+    #   raw -> "{...}" -> dict
+    if isinstance(parsed, str):
+        try:
+            nested = json.loads(parsed)
+        except json.JSONDecodeError:
+            return None
+        else:
+            return nested if isinstance(nested, dict) else None
+
+    return parsed if isinstance(parsed, dict) else None
+
+
 class ProcessText(BaseStepFunction):
     """
     This class contains methods that serve as the "text processing" for the State Machine.
@@ -678,69 +721,66 @@ class ProcessText(BaseStepFunction):
             fallback=self.correlation_id,
         )
 
+        # ------------------------------------------------------------------
+        # Call Bedrock and normalise the response
+        # ------------------------------------------------------------------
         raw_response = call_bedrock_agent(
             session_id=session_identifier,
             input_text=input_text,
         )
 
+        # Start with the raw string as a fallback; override from JSON if possible
         reply_text = raw_response or ""
-        system_response_metadata: Optional[Dict[str, Any]] = None
         profile_updates: Dict[str, Any] = {}
         conversation_tag_updates: Dict[str, Any] = {}
         user_update_entries: List[Dict[str, Any]] = []
         bedrock_response_json: Optional[Dict[str, Any]] = None
 
         if raw_response:
-            try:
-                parsed = json.loads(raw_response)
-            except json.JSONDecodeError:
+            parsed = _parse_bedrock_json(raw_response)
+
+            if parsed is None:
+                # Fallback – keep raw string only (wrapped under raw_response)
                 self.logger.warning(
-                    "Bedrock response was not valid JSON",
+                    "Bedrock response was not valid JSON even after best-effort parsing",
                     extra={"session_id": session_identifier},
                 )
                 bedrock_response_json = {"raw_response": raw_response}
             else:
-                if isinstance(parsed, dict):
-                    bedrock_response_json = parsed
-                    candidate_reply = parsed.get("reply")
-                    if isinstance(candidate_reply, str):
-                        reply_text = candidate_reply
-                        metadata_candidate = parsed.get("metadata") or parsed.get(
-                            "Metadata"
-                        )
-                        if isinstance(metadata_candidate, dict):
-                            system_response_metadata = metadata_candidate
-                    else:
-                        self.logger.warning(
-                            "Bedrock response missing string reply",
-                            extra={"parsed_keys": list(parsed.keys())},
-                        )
+                bedrock_response_json = parsed
 
-                    updates_candidate = parsed.get("user_updates")
-                    entries = _normalise_user_update_entries(updates_candidate)
-                    (
-                        profile_updates,
-                        conversation_tag_updates,
-                        user_update_entries,
-                    ) = _partition_user_update_entries(entries)
+                # 1) Extract reply / response text (string only)
+                candidate_reply = parsed.get("reply") or parsed.get("response")
+                if isinstance(candidate_reply, str):
+                    reply_text = candidate_reply
                 else:
                     self.logger.warning(
-                        "Bedrock response JSON was not an object",
-                        extra={"type": type(parsed).__name__},
+                        "Bedrock response missing string reply/response field",
+                        extra={"parsed_keys": list(parsed.keys())},
                     )
-                    bedrock_response_json = {"raw_response": parsed}
 
-        # Build canonical system_response
-        self.response_message = unescape(reply_text)
-        system_response: Dict[str, Any] = {
-            "text": self.response_message,
-        }
-        if system_response_metadata:
-            system_response["metadata"] = system_response_metadata
-        if user_update_entries:
-            # canonical: include user_updates inside system_response
-            system_response["user_updates"] = user_update_entries
+                # 2) Extract user_updates / interaction_log for profile/state updates
+                updates_candidate = parsed.get("user_updates")
+                if updates_candidate is None:
+                    updates_candidate = parsed.get("interaction_log")
 
+                entries = _normalise_user_update_entries(updates_candidate)
+                (
+                    profile_updates,
+                    conversation_tag_updates,
+                    user_update_entries,
+                ) = _partition_user_update_entries(entries)
+
+        # Canonical system_response == bedrock_response
+        system_response: Optional[Dict[str, Any]] = None
+        if bedrock_response_json is not None:
+            system_response = bedrock_response_json
+        elif raw_response:
+            system_response = {"raw_response": raw_response}
+
+        # ------------------------------------------------------------------
+        # Apply profile / conversation state updates
+        # ------------------------------------------------------------------
         if profile_updates or conversation_tag_updates:
             if profile_updates:
                 _update_user_info_profile(from_number, profile_updates, last_seen_at)
@@ -768,18 +808,25 @@ class ProcessText(BaseStepFunction):
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
 
-        if _history_helper and current_whatsapp_id:
+        # Persist system_response onto the history item for this WhatsApp message
+        if _history_helper and current_whatsapp_id and system_response is not None:
             try:
+                # Use same JSON for system_response and legacy bedrock_response
                 _history_helper.update_system_response(
                     partition_keys,
                     current_whatsapp_id,
                     system_response,
-                    bedrock_response_json,
+                    system_response,
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to attach system response to history item")
 
         final_order_progress_summary = format_order_progress_summary(prompt_state)
+
+        # ------------------------------------------------------------------
+        # Produce the final WhatsApp reply (plain text only)
+        # ------------------------------------------------------------------
+        self.response_message = unescape(reply_text or "")
 
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
@@ -790,15 +837,21 @@ class ProcessText(BaseStepFunction):
                 if section not in final_response:
                     final_response = f"{final_response}\n\n{section}"
 
+        # ------------------------------------------------------------------
+        # Structured output for downstream steps
+        # ------------------------------------------------------------------
         self.event["response_message"] = final_response
         if customer_summary:
             self.event["customer_summary"] = customer_summary
         if final_order_progress_summary:
             self.event["order_progress_summary"] = final_order_progress_summary
         self.event["conversation_state"] = conversation_state
-        self.event["system_response"] = system_response
-        if bedrock_response_json:
-            self.event["bedrock_response"] = bedrock_response_json
+
+        if system_response is not None:
+            # system_response and bedrock_response are intentionally identical
+            self.event["system_response"] = system_response
+            self.event["bedrock_response"] = system_response
+
         # Keep top-level user_updates for backward compatibility (optional)
         if user_update_entries:
             self.event["user_updates"] = user_update_entries
