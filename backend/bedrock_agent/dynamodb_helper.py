@@ -1,7 +1,7 @@
 import os
-import json
-import boto3
 from typing import Any, Dict, List, Optional
+
+import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
@@ -20,14 +20,15 @@ table = dynamodb_resource.Table(TABLE_NAME)
 # =====================================================================
 # QUERY: Fetch by PK + SK begins_with
 # =====================================================================
-def query_dynamodb_pk_sk(
-    partition_key: str, sort_key_prefix: str
-) -> List[Dict[str, Any]]:
+
+
+def query_dynamodb_pk_sk(partition_key: str, sort_key_prefix: str) -> List[Dict[str, Any]]:
     """
-    Query DynamoDB items by PK and SK beginning with SK prefix
+    Query DynamoDB items by PK and SK beginning with SK prefix.
     """
     print(
-        f"[DDB] query_dynamodb_pk_sk: PK={partition_key}, SK begins_with={sort_key_prefix}"
+        f"[DDB] query_dynamodb_pk_sk: PK={partition_key}, "
+        f"SK begins_with={sort_key_prefix}"
     )
 
     all_items: List[Dict[str, Any]] = []
@@ -68,7 +69,7 @@ def query_by_conversation(
     Query messages for a conversation ID
     SK format: MESSAGE#<timestamp> or STATE#<conversation_id>
     """
-    prefix = f"MESSAGE#"
+    prefix = "MESSAGE#"
     try:
         condition = Key("PK").eq(partition_key) & Key("SK").begins_with(prefix)
 
@@ -97,7 +98,7 @@ def get_conversation_state(
     partition_key: str, conversation_id: int
 ) -> Optional[Dict[str, Any]]:
     """
-    Fetch STATE#<conversation_id> record
+    Fetch STATE#<conversation_id> record.
     """
     sk = f"STATE#{conversation_id}"
     try:
@@ -109,9 +110,9 @@ def get_conversation_state(
 
 def put_conversation_state(
     partition_key: str, conversation_id: int, state: Dict[str, Any]
-):
+) -> None:
     """
-    Store or overwrite conversation state
+    Store or overwrite conversation state.
     """
     sk = f"STATE#{conversation_id}"
     try:
@@ -138,7 +139,7 @@ def update_system_response(
     whatsapp_id: str,
     system_response: Dict[str, Any],
     legacy_raw_same_json: Optional[Dict[str, Any]] = None,
-):
+) -> None:
     """
     Update the message item identified by whatsapp_id, under ANY valid PK.
 
@@ -147,7 +148,6 @@ def update_system_response(
 
     Also writes legacy field "bedrock_response" (same JSON) if provided.
     """
-
     if not partition_keys:
         print("[DDB] update_system_response: No partition keys provided")
         return
@@ -193,8 +193,3 @@ def update_system_response(
             print(f"[DDB] ERROR updating system_response for PK={pk}: {exc}")
 
     print("[DDB] update_system_response: Message not found under any PK")
-
-
-# =====================================================================
-# END
-# =====================================================================
