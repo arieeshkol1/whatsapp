@@ -98,7 +98,9 @@ def test_process_text_logs_interaction_history(monkeypatch):
         process_text_module, "format_order_progress_summary", lambda *_: None
     )
     monkeypatch.setattr(
-        process_text_module, "call_bedrock_agent", lambda **_: json.dumps({"reply": "היי"})
+        process_text_module,
+        "call_bedrock_agent",
+        lambda **_: json.dumps({"reply": "היי"}),
     )
 
     event = _base_event()
