@@ -279,15 +279,17 @@ class DynamoDBHelper:
         whatsapp_id: str,
         system_response: Dict[str, Any],
         full_response: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> bool:
         """Attach system response metadata to a stored message.
 
         Tries the provided partition key candidates in order until a matching
         message is found.
+
+        Returns ``True`` when an update succeeds, otherwise ``False``.
         """
 
         if not whatsapp_id or not system_response:
-            return
+            return False
 
         for partition_key in partition_keys:
             if not partition_key:
@@ -348,7 +350,7 @@ class DynamoDBHelper:
                 }
 
                 self.table.update_item(**update_kwargs)
-                return
+                return True
             except ClientError as error:
                 logger.error(
                     "Failed to update system response",
@@ -357,10 +359,12 @@ class DynamoDBHelper:
                         "pk": partition_key,
                         "sk": sort_key,
                         "whatsapp_id": whatsapp_id,
-                        "error": str(error),
-                    },
-                )
+                    "error": str(error),
+                },
+            )
                 continue
+
+        return False
 
     def get_customer_profile(
         self, normalized_phone: str, sort_key: str
