@@ -74,3 +74,41 @@ def test_process_text_persists_user_updates(monkeypatch):
 
     # With no UsersInfo table configured, no table handle should be initialised.
     assert process_text_module._users_info_table is None
+
+
+def test_process_text_logs_interaction_history(monkeypatch):
+    recorded: Dict[str, Any] = {}
+
+    class FakeHistoryHelper:
+        def put_item(self, item):
+            recorded.update(item)
+            return {"status": "ok"}
+
+    monkeypatch.setattr(process_text_module, "_history_helper", FakeHistoryHelper())
+    monkeypatch.setattr(
+        process_text_module, "_history_partition_keys", lambda *_: ["972500000000"]
+    )
+    monkeypatch.setattr(process_text_module, "load_customer_profile", lambda *_: None)
+    monkeypatch.setattr(process_text_module, "format_customer_summary", lambda *_: None)
+    monkeypatch.setattr(process_text_module, "get_rules_text", lambda: None)
+    monkeypatch.setattr(
+        process_text_module, "_fetch_conversation_history", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        process_text_module, "format_order_progress_summary", lambda *_: None
+    )
+    monkeypatch.setattr(
+        process_text_module,
+        "call_bedrock_agent",
+        lambda **_: json.dumps({"reply": "היי"}),
+    )
+
+    event = _base_event()
+    event["correlation_id"] = "corr-123"
+
+    process_text_module.ProcessText(event).process_text()
+
+    assert recorded["PK"] == "972500000000"
+    assert recorded["conversation_id"] == 1
+    assert recorded["correlation_id"] == "corr-123"
+    assert recorded["system_response"]["text"] == "היי"
