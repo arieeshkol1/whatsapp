@@ -39,7 +39,9 @@ __all__ = [
 
 logger = custom_logger()
 
-DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
+DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE") or os.environ.get(
+    "INTERACTION_TABLE"
+)
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
 USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
@@ -540,6 +542,14 @@ def _persist_interaction_history_entry(
     partition_keys = _history_partition_keys(from_number)
     if not partition_keys:
         return
+
+    try:
+        if whatsapp_id and _history_helper.update_system_response(
+            partition_keys, whatsapp_id, system_response, system_response
+        ):
+            return
+    except Exception:  # pragma: no cover - defensive logging
+        logger.exception("Failed to attach system response to history item")
 
     created_at = datetime.utcnow().isoformat()
     item: Dict[str, Any] = {

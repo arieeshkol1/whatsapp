@@ -80,6 +80,17 @@ def test_process_text_logs_interaction_history(monkeypatch):
     recorded: Dict[str, Any] = {}
 
     class FakeHistoryHelper:
+        def update_system_response(
+            self, partition_keys, whatsapp_id, system_response, full_response=None
+        ):
+            self.last_update = {
+                "partition_keys": partition_keys,
+                "whatsapp_id": whatsapp_id,
+                "system_response": system_response,
+                "full_response": full_response,
+            }
+            return False
+
         def put_item(self, item):
             recorded.update(item)
             return {"status": "ok"}
@@ -108,6 +119,12 @@ def test_process_text_logs_interaction_history(monkeypatch):
 
     process_text_module.ProcessText(event).process_text()
 
+    assert process_text_module._history_helper.last_update == {
+        "partition_keys": ["972500000000"],
+        "whatsapp_id": "wamid.example",
+        "system_response": {"text": "היי"},
+        "full_response": {"text": "היי"},
+    }
     assert recorded["PK"] == "972500000000"
     assert recorded["conversation_id"] == 1
     assert recorded["correlation_id"] == "corr-123"

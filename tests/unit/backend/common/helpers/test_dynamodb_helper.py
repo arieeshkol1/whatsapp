@@ -89,18 +89,19 @@ def test_update_system_response_persists_full_response_when_missing(monkeypatch)
 
     system_response: Dict[str, str] = {"text": "שלום"}
 
-    helper.update_system_response(
+    updated = helper.update_system_response(
         partition_keys=["972524347196"],
         whatsapp_id=item["whatsapp_id"],
         system_response=system_response,
         full_response=None,
     )
 
-    updated = helper.table.get_item(  # type: ignore[attr-defined]
+    updated_item = helper.table.get_item(  # type: ignore[attr-defined]
         Key={"PK": item["PK"], "SK": item["SK"]}
     )["Item"]
 
-    assert updated["system_response"] == system_response
+    assert updated is True
+    assert updated_item["system_response"] == system_response
 
 
 def test_update_system_response_pages_until_match(monkeypatch):
@@ -127,11 +128,12 @@ def test_update_system_response_pages_until_match(monkeypatch):
 
     system_response: Dict[str, str] = {"text": "שלום"}
 
-    helper.update_system_response(
+    updated = helper.update_system_response(
         partition_keys=["972524347196"],
         whatsapp_id=target_whatsapp_id,
         system_response=system_response,
         full_response=None,
     )
 
+    assert updated is True
     assert items[1]["system_response"] == system_response
