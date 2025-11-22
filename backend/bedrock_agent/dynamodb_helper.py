@@ -22,7 +22,9 @@ table = dynamodb_resource.Table(TABLE_NAME)
 # =====================================================================
 
 
-def query_dynamodb_pk_sk(partition_key: str, sort_key_prefix: str) -> List[Dict[str, Any]]:
+def query_dynamodb_pk_sk(
+    partition_key: str, sort_key_prefix: str
+) -> List[Dict[str, Any]]:
     """
     Query DynamoDB items by PK and SK beginning with SK prefix.
     """
