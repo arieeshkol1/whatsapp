@@ -214,6 +214,7 @@ def _stringify_items(items: List[Dict[str, Any]]) -> List[str]:
 
 # --------- ACTION IMPLEMENTATIONS --------- #
 
+
 def action_group_query_user_data(parameters: List[Dict[str, Any]]) -> List[str]:
     """
     Read user data by phone_number.
@@ -300,7 +301,7 @@ def action_group_update_user_name(parameters: List[Dict[str, Any]]) -> List[str]
 
 
 def action_group_query_interaction_history(
-    parameters: List[Dict[str, Any]]
+    parameters: List[Dict[str, Any]],
 ) -> List[str]:
     """
     Unified QueryInteractionHistory:
@@ -329,9 +330,7 @@ def action_group_query_interaction_history(
             INTERACTION_TABLE, phone_number, start_date, end_date
         )
     else:
-        items = _scan_interactions_global(
-            INTERACTION_TABLE, start_date, end_date
-        )
+        items = _scan_interactions_global(INTERACTION_TABLE, start_date, end_date)
 
     if not items:
         return [
@@ -359,6 +358,7 @@ def action_group_query_interaction_history(
 
 
 # --------- MAIN LAMBDA HANDLER --------- #
+
 
 def lambda_handler(event, context):
     """
@@ -408,21 +408,12 @@ def lambda_handler(event, context):
     body_text = "\n".join(results)
     message_version = event.get("messageVersion") or "1.0"
 
-    response_body = {
-        "TEXT": {
-            "body": body_text
-        }
-    }
+    response_body = {"TEXT": {"body": body_text}}
 
     action_response = {
         "actionGroup": action_group,
         "function": function_name,
-        "functionResponse": {
-            "responseBody": response_body
-        }
+        "functionResponse": {"responseBody": response_body},
     }
 
-    return {
-        "messageVersion": message_version,
-        "response": action_response
-    }
+    return {"messageVersion": message_version, "response": action_response}
