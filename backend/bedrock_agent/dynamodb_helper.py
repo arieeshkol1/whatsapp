@@ -10,8 +10,8 @@ from botocore.exceptions import ClientError
 # =====================================================================
 
 TABLE_NAME = os.environ.get("DYNAMODB_TABLE") or os.environ.get("TABLE_NAME")
-SYSTEM_RESPONSE_ATTRIBUTE = "system_response"    # canonical unified field
-RAW_BEDROCK_ATTRIBUTE = "bedrock_response"       # optional legacy (kept same)
+SYSTEM_RESPONSE_ATTRIBUTE = "system_response"  # canonical unified field
+RAW_BEDROCK_ATTRIBUTE = "bedrock_response"  # optional legacy (kept same)
 
 dynamodb_resource = boto3.resource("dynamodb")
 table = dynamodb_resource.Table(TABLE_NAME)
@@ -20,11 +20,15 @@ table = dynamodb_resource.Table(TABLE_NAME)
 # =====================================================================
 # QUERY: Fetch by PK + SK begins_with
 # =====================================================================
-def query_dynamodb_pk_sk(partition_key: str, sort_key_prefix: str) -> List[Dict[str, Any]]:
+def query_dynamodb_pk_sk(
+    partition_key: str, sort_key_prefix: str
+) -> List[Dict[str, Any]]:
     """
     Query DynamoDB items by PK and SK beginning with SK prefix
     """
-    print(f"[DDB] query_dynamodb_pk_sk: PK={partition_key}, SK begins_with={sort_key_prefix}")
+    print(
+        f"[DDB] query_dynamodb_pk_sk: PK={partition_key}, SK begins_with={sort_key_prefix}"
+    )
 
     all_items: List[Dict[str, Any]] = []
     try:
@@ -56,7 +60,10 @@ def query_dynamodb_pk_sk(partition_key: str, sort_key_prefix: str) -> List[Dict[
 # HELPERS: History State
 # =====================================================================
 
-def query_by_conversation(partition_key: str, conversation_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+
+def query_by_conversation(
+    partition_key: str, conversation_id: int, limit: int = 50
+) -> List[Dict[str, Any]]:
     """
     Query messages for a conversation ID
     SK format: MESSAGE#<timestamp> or STATE#<conversation_id>
@@ -65,10 +72,7 @@ def query_by_conversation(partition_key: str, conversation_id: int, limit: int =
     try:
         condition = Key("PK").eq(partition_key) & Key("SK").begins_with(prefix)
 
-        response = table.query(
-            KeyConditionExpression=condition,
-            Limit=limit
-        )
+        response = table.query(KeyConditionExpression=condition, Limit=limit)
         items = response.get("Items", [])
 
         while "LastEvaluatedKey" in response:
@@ -89,7 +93,9 @@ def query_by_conversation(partition_key: str, conversation_id: int, limit: int =
         return []
 
 
-def get_conversation_state(partition_key: str, conversation_id: int) -> Optional[Dict[str, Any]]:
+def get_conversation_state(
+    partition_key: str, conversation_id: int
+) -> Optional[Dict[str, Any]]:
     """
     Fetch STATE#<conversation_id> record
     """
@@ -101,18 +107,22 @@ def get_conversation_state(partition_key: str, conversation_id: int) -> Optional
         return None
 
 
-def put_conversation_state(partition_key: str, conversation_id: int, state: Dict[str, Any]):
+def put_conversation_state(
+    partition_key: str, conversation_id: int, state: Dict[str, Any]
+):
     """
     Store or overwrite conversation state
     """
     sk = f"STATE#{conversation_id}"
     try:
-        table.put_item(Item={
-            "PK": partition_key,
-            "SK": sk,
-            "conversation_id": conversation_id,
-            **state
-        })
+        table.put_item(
+            Item={
+                "PK": partition_key,
+                "SK": sk,
+                "conversation_id": conversation_id,
+                **state,
+            }
+        )
     except ClientError as exc:
         print(f"[DDB] ERROR: put_conversation_state failed: {exc}")
         raise
@@ -121,6 +131,7 @@ def put_conversation_state(partition_key: str, conversation_id: int, state: Dict
 # =====================================================================
 # UPDATE: Attach system_response to a specific WhatsApp message
 # =====================================================================
+
 
 def update_system_response(
     partition_keys: List[str],
@@ -148,7 +159,7 @@ def update_system_response(
                 KeyConditionExpression=Key("PK").eq(pk),
                 FilterExpression="whatsapp_id = :w",
                 ExpressionAttributeValues={":w": whatsapp_id},
-                Limit=1
+                Limit=1,
             )
 
             items = result.get("Items", [])
