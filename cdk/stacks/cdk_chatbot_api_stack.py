@@ -469,7 +469,9 @@ class ChatbotAPIStack(Stack):
             "DB_AGENT_ID": self.app_config.get("db_agent_id"),
             "DB_AGENT_ALIAS_ID": self.app_config.get("db_agent_alias_id"),
             "USER_DATA_TABLE": (
-                self.user_data_table.table_name if hasattr(self, "user_data_table") else None
+                self.user_data_table.table_name
+                if hasattr(self, "user_data_table")
+                else None
             ),
         }
 
@@ -1324,9 +1326,7 @@ class ChatbotAPIStack(Stack):
                     '"AllowFromPublic":true}]'
                 ),
                 type="network",
-                description=(
-                    "Network policy for the opensearch serverless collection"
-                ),
+                description=("Network policy for the opensearch serverless collection"),
             )
 
             opensearch_serverless_collection = oss.CfnCollection(
@@ -1650,9 +1650,7 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                 ),
                 aws_bedrock.CfnAgent.AgentActionGroupProperty(
                     action_group_name="CreateBundles",
-                    description=(
-                        "Curates bundles or gift sets for Havitush shoppers."
-                    ),
+                    description=("Curates bundles or gift sets for Havitush shoppers."),
                     action_group_executor=aws_bedrock.CfnAgent.ActionGroupExecutorProperty(
                         lambda_=self.lambda_action_groups.function_arn,
                     ),
@@ -1729,9 +1727,7 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
         aws_ssm.StringParameter(
             self,
             "SSMAgentId",
-            parameter_name=(
-                f"/{self.deployment_environment}/aws-wpp/bedrock-agent-id"
-            ),
+            parameter_name=(f"/{self.deployment_environment}/aws-wpp/bedrock-agent-id"),
             string_value=self.bedrock_agent.ref,
         )
 
