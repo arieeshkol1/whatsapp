@@ -1,66 +1,189 @@
-# Built-in imports
 import os
-from typing import Any, Dict, List
-
+import json
 import boto3
+from typing import Any, Dict, List, Optional
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-# TODO: Enhance code to be production grade. This is just a POC
-# (Add logger, add error handling, add optimizations, etc...)
+# =====================================================================
+# CONSTANTS
+# =====================================================================
 
-TABLE_NAME = os.environ.get("TABLE_NAME")
+TABLE_NAME = os.environ.get("DYNAMODB_TABLE") or os.environ.get("TABLE_NAME")
+SYSTEM_RESPONSE_ATTRIBUTE = "system_response"    # canonical unified field
+RAW_BEDROCK_ATTRIBUTE = "bedrock_response"       # optional legacy (kept same)
+
 dynamodb_resource = boto3.resource("dynamodb")
 table = dynamodb_resource.Table(TABLE_NAME)
 
 
-def query_dynamodb_pk_sk(
-    partition_key: str, sort_key_portion: str
-) -> List[Dict[str, Any]]:
+# =====================================================================
+# QUERY: Fetch by PK + SK begins_with
+# =====================================================================
+def query_dynamodb_pk_sk(partition_key: str, sort_key_prefix: str) -> List[Dict[str, Any]]:
     """
-    Function to run a query against DynamoDB with partition key and the sort
-    key with <begins-with> functionality on it.
-    :param partition_key (str): partition key value.
-    :param sort_key_portion (str): sort key portion to use in query.
+    Query DynamoDB items by PK and SK beginning with SK prefix
     """
-    print(
-        f"Starting query_dynamodb_pk_sk with "
-        f"pk: ({partition_key}) and sk: ({sort_key_portion})"
-    )
+    print(f"[DDB] query_dynamodb_pk_sk: PK={partition_key}, SK begins_with={sort_key_prefix}")
 
     all_items: List[Dict[str, Any]] = []
     try:
-        # The structure key for a single-table-design "PK" and "SK" naming
-        key_condition = Key("PK").eq(partition_key) & Key("SK").begins_with(
-            sort_key_portion
-        )
-        limit = 50
+        condition = Key("PK").eq(partition_key) & Key("SK").begins_with(sort_key_prefix)
 
-        # Initial query before pagination
         response = table.query(
-            KeyConditionExpression=key_condition,
-            Limit=limit,
+            KeyConditionExpression=condition,
+            Limit=50,
         )
-        if "Items" in response:
-            all_items.extend(response["Items"])
 
-        # Pagination loop for possible following queries
+        all_items.extend(response.get("Items", []))
+
         while "LastEvaluatedKey" in response:
             response = table.query(
-                KeyConditionExpression=key_condition,
+                KeyConditionExpression=condition,
+                Limit=50,
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            all_items.extend(response.get("Items", []))
+
+        return all_items
+
+    except ClientError as exc:
+        print(f"[DDB] ERROR in query_dynamodb_pk_sk: {exc}")
+        raise
+
+
+# =====================================================================
+# HELPERS: History State
+# =====================================================================
+
+def query_by_conversation(partition_key: str, conversation_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Query messages for a conversation ID
+    SK format: MESSAGE#<timestamp> or STATE#<conversation_id>
+    """
+    prefix = f"MESSAGE#"
+    try:
+        condition = Key("PK").eq(partition_key) & Key("SK").begins_with(prefix)
+
+        response = table.query(
+            KeyConditionExpression=condition,
+            Limit=limit
+        )
+        items = response.get("Items", [])
+
+        while "LastEvaluatedKey" in response:
+            response = table.query(
+                KeyConditionExpression=condition,
                 Limit=limit,
                 ExclusiveStartKey=response["LastEvaluatedKey"],
             )
-            if "Items" in response:
-                all_items.extend(response["Items"])
+            items.extend(response.get("Items", []))
 
-        return all_items
-    except ClientError as error:
-        print(
-            f"query operation failed for: "
-            f"table_name: {TABLE_NAME}."
-            f"pk: {partition_key}."
-            f"sort_key_portion: {sort_key_portion}."
-            f"error: {error}."
-        )
-        raise error
+        # Filter by conversation_id
+        items = [i for i in items if i.get("conversation_id") == conversation_id]
+
+        return items
+
+    except ClientError as exc:
+        print(f"[DDB] ERROR: query_by_conversation failed: {exc}")
+        return []
+
+
+def get_conversation_state(partition_key: str, conversation_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Fetch STATE#<conversation_id> record
+    """
+    sk = f"STATE#{conversation_id}"
+    try:
+        response = table.get_item(Key={"PK": partition_key, "SK": sk})
+        return response.get("Item")
+    except ClientError:
+        return None
+
+
+def put_conversation_state(partition_key: str, conversation_id: int, state: Dict[str, Any]):
+    """
+    Store or overwrite conversation state
+    """
+    sk = f"STATE#{conversation_id}"
+    try:
+        table.put_item(Item={
+            "PK": partition_key,
+            "SK": sk,
+            "conversation_id": conversation_id,
+            **state
+        })
+    except ClientError as exc:
+        print(f"[DDB] ERROR: put_conversation_state failed: {exc}")
+        raise
+
+
+# =====================================================================
+# UPDATE: Attach system_response to a specific WhatsApp message
+# =====================================================================
+
+def update_system_response(
+    partition_keys: List[str],
+    whatsapp_id: str,
+    system_response: Dict[str, Any],
+    legacy_raw_same_json: Optional[Dict[str, Any]] = None,
+):
+    """
+    Update the message item identified by whatsapp_id, under ANY valid PK.
+
+    Writes ONLY ONE canonical attribute:
+        system_response = { ... JSON ... }
+
+    Also writes legacy field "bedrock_response" (same JSON) if provided.
+    """
+
+    if not partition_keys:
+        print("[DDB] update_system_response: No partition keys provided")
+        return
+
+    for pk in partition_keys:
+        try:
+            # Query message item by PK + filter_expression for whatsapp_id
+            result = table.query(
+                KeyConditionExpression=Key("PK").eq(pk),
+                FilterExpression="whatsapp_id = :w",
+                ExpressionAttributeValues={":w": whatsapp_id},
+                Limit=1
+            )
+
+            items = result.get("Items", [])
+            if not items:
+                continue  # Try next PK
+
+            item = items[0]
+            sk = item["SK"]
+
+            # Build UpdateExpression
+            update_expr = "SET #sys = :s"
+            expr_names = {"#sys": SYSTEM_RESPONSE_ATTRIBUTE}
+            expr_values = {":s": system_response}
+
+            if legacy_raw_same_json is not None:
+                update_expr += ", #legacy = :l"
+                expr_names["#legacy"] = RAW_BEDROCK_ATTRIBUTE
+                expr_values[":l"] = legacy_raw_same_json
+
+            table.update_item(
+                Key={"PK": pk, "SK": sk},
+                UpdateExpression=update_expr,
+                ExpressionAttributeNames=expr_names,
+                ExpressionAttributeValues=expr_values,
+            )
+
+            print(f"[DDB] system_response updated for PK={pk}, SK={sk}")
+            return
+
+        except ClientError as exc:
+            print(f"[DDB] ERROR updating system_response for PK={pk}: {exc}")
+
+    print("[DDB] update_system_response: Message not found under any PK")
+
+
+# =====================================================================
+# END
+# =====================================================================
