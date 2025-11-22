@@ -39,7 +39,7 @@ __all__ = [
 
 logger = custom_logger()
 
-DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
+DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE") or os.environ.get("INTERACTION_TABLE")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
 USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
@@ -525,6 +525,51 @@ def _format_history_messages(items: List[dict], current_whatsapp_id: str) -> Lis
     return history_lines
 
 
+def _persist_interaction_history_entry(
+    from_number: Optional[str],
+    conversation_id: int,
+    whatsapp_id: Optional[str],
+    message_text: str,
+    system_response: Dict[str, Any],
+    last_seen_at: Optional[Any],
+    correlation_id: str,
+) -> None:
+    if not _history_helper:
+        return
+
+    partition_keys = _history_partition_keys(from_number)
+    if not partition_keys:
+        return
+
+    try:
+        if whatsapp_id and _history_helper.update_system_response(
+            partition_keys, whatsapp_id, system_response, system_response
+        ):
+            return
+    except Exception:  # pragma: no cover - defensive logging
+        logger.exception("Failed to attach system response to history item")
+
+    created_at = datetime.utcnow().isoformat()
+    item: Dict[str, Any] = {
+        "PK": partition_keys[0],
+        "SK": f"MESSAGE#{created_at}",
+        "from_number": str(from_number),
+        "created_at": created_at,
+        "type": "system_response",
+        "text": message_text,
+        "whatsapp_id": whatsapp_id or correlation_id,
+        "whatsapp_timestamp": str(last_seen_at) if last_seen_at else created_at,
+        "conversation_id": conversation_id or 1,
+        "correlation_id": correlation_id,
+        "system_response": system_response,
+    }
+
+    try:
+        _history_helper.put_item(item)
+    except Exception:  # pragma: no cover - defensive logging
+        logger.exception("Failed to persist interaction history entry", extra=item)
+
+
 class ProcessText(BaseStepFunction):
     """
     This class contains methods that serve as the "text processing" for the State Machine.
@@ -802,5 +847,15 @@ class ProcessText(BaseStepFunction):
         # Keep top-level user_updates for backward compatibility (optional)
         if user_update_entries:
             self.event["user_updates"] = user_update_entries
+
+        _persist_interaction_history_entry(
+            from_number=from_number,
+            conversation_id=conversation_id,
+            whatsapp_id=current_whatsapp_id,
+            message_text=final_response,
+            system_response=system_response,
+            last_seen_at=last_seen_at,
+            correlation_id=self.correlation_id,
+        )
 
         return self.event
