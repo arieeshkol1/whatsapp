@@ -3,9 +3,10 @@ import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
 
+# Environment variables
 USER_DATA_TABLE = os.environ.get("USER_DATA_TABLE")
 INTERACTION_TABLE = os.environ.get("INTERACTION_TABLE")
 
@@ -13,46 +14,51 @@ dynamodb = boto3.resource("dynamodb")
 
 
 def _get_param(parameters: List[Dict[str, Any]], name: str) -> Optional[str]:
+    """
+    Helper to extract a parameter by name from the parameters list.
+
+    Supports:
+      { "name": "phone_number", "value": "+972..." }
+    and defensively:
+      { "name": "phone_number", "value": { "stringValue": "+972..." } }
+    """
     for param in parameters:
-        if param.get("name") == name:
-            return param.get("value")
+        if param.get("name") != name:
+            continue
+
+        value = param.get("value")
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict) and "stringValue" in value:
+            return value["stringValue"]
+        if value is not None:
+            return str(value)
+
     return None
 
 
-def _query_interaction_table(
-    table_name: Optional[str], partition_key: str, sort_key_prefix: str
-) -> List[Dict[str, Any]]:
-    if not table_name:
-        return []
-
-    table = dynamodb.Table(table_name)
-    key_condition = Key("PK").eq(partition_key)
-    if sort_key_prefix:
-        key_condition &= Key("SK").begins_with(sort_key_prefix)
-
-    try:
-        response = table.query(KeyConditionExpression=key_condition, Limit=50)
-    except ClientError:
-        return []
-
-    items = response.get("Items", [])
-    while response.get("LastEvaluatedKey"):
-        response = table.query(
-            KeyConditionExpression=key_condition,
-            Limit=50,
-            ExclusiveStartKey=response["LastEvaluatedKey"],
-        )
-        items.extend(response.get("Items", []))
-    return items
+def _safe_json(data: Any) -> str:
+    """
+    JSON-dumps with handling for Decimal and other non-serializable types.
+    """
+    return json.dumps(data, ensure_ascii=False, default=str)
 
 
 def _get_user_data(
-    table_name: Optional[str], phone_number: str
+    table_name: Optional[str],
+    phone_number: str,
 ) -> List[Dict[str, Any]]:
+    """
+    Fetch user data from USER_DATA_TABLE by phone number.
+
+    IMPORTANT: "PhoneNumber" must match your DynamoDB PK name exactly.
+    """
     if not table_name:
+        print("USER_DATA_TABLE env var not set")
         return []
 
     table = dynamodb.Table(table_name)
+
     candidates = [phone_number]
     trimmed = phone_number.strip()
     if trimmed and trimmed not in candidates:
@@ -61,7 +67,8 @@ def _get_user_data(
     for candidate in candidates:
         try:
             response = table.get_item(Key={"PhoneNumber": candidate})
-        except ClientError:
+        except ClientError as e:
+            print(f"DynamoDB get_item failed for {candidate}: {e}")
             continue
 
         item = response.get("Item") if isinstance(response, dict) else None
@@ -71,67 +78,351 @@ def _get_user_data(
     return []
 
 
+def _query_user_interactions(
+    table_name: Optional[str],
+    phone_number: str,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Query interactions for a single user (by phone_number without '+').
+
+    Uses a Query on PK, and optionally filters by created_at based on
+    start_date / end_date (strings 'YYYY-MM-DD').
+
+    We do NOT try to be super fancy with SK ranges, we just:
+    - query all by PK
+    - optionally filter on created_at (string compare) in DynamoDB.
+    """
+    if not table_name:
+        print("INTERACTION_TABLE env var not set")
+        return []
+
+    pk = phone_number.lstrip("+")
+    print(
+        f"DEBUG: _query_user_interactions for PK={pk}, "
+        f"start_date={start_date}, end_date={end_date}"
+    )
+
+    table = dynamodb.Table(table_name)
+
+    key_condition = Key("PK").eq(pk)
+    query_kwargs: Dict[str, Any] = {"KeyConditionExpression": key_condition}
+
+    # Build FilterExpression on created_at if date filters are provided
+    filter_expr = None
+    if start_date and end_date:
+        # Include everything from start_date to end_date (inclusive).
+        # created_at is ISO like "2025-11-20T17:10:59.585566+00:00",
+        # so comparing with "2025-11-20" and "2025-11-21" works lexicographically.
+        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
+    elif start_date:
+        filter_expr = Attr("created_at").gte(start_date)
+    elif end_date:
+        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
+
+    if filter_expr is not None:
+        query_kwargs["FilterExpression"] = filter_expr
+
+    items: List[Dict[str, Any]] = []
+
+    try:
+        response = table.query(Limit=50, **query_kwargs)
+        print(f"DEBUG: first page item count={len(response.get('Items', []))}")
+        items.extend(response.get("Items", []))
+
+        while response.get("LastEvaluatedKey"):
+            response = table.query(
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+                Limit=50,
+                **query_kwargs,
+            )
+            print(f"DEBUG: next page item count={len(response.get('Items', []))}")
+            items.extend(response.get("Items", []))
+    except ClientError as e:
+        print(f"DynamoDB query failed in _query_user_interactions: {e}")
+        return []
+
+    return items
+
+
+def _scan_interactions_global(
+    table_name: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Scan interactions across ALL users, optionally filtered by date range.
+
+    Uses Scan with FilterExpression on created_at.
+    """
+    if not table_name:
+        print("INTERACTION_TABLE env var not set")
+        return []
+
+    print(
+        f"DEBUG: _scan_interactions_global start_date={start_date}, "
+        f"end_date={end_date}"
+    )
+
+    table = dynamodb.Table(table_name)
+
+    filter_expr = None
+    if start_date and end_date:
+        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
+    elif start_date:
+        filter_expr = Attr("created_at").gte(start_date)
+    elif end_date:
+        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
+
+    scan_kwargs: Dict[str, Any] = {}
+    if filter_expr is not None:
+        scan_kwargs["FilterExpression"] = filter_expr
+
+    items: List[Dict[str, Any]] = []
+
+    try:
+        response = table.scan(Limit=50, **scan_kwargs)
+        print(f"DEBUG: first scan page item count={len(response.get('Items', []))}")
+        items.extend(response.get("Items", []))
+
+        while response.get("LastEvaluatedKey"):
+            response = table.scan(
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+                Limit=50,
+                **scan_kwargs,
+            )
+            print(f"DEBUG: next scan page item count={len(response.get('Items', []))}")
+            items.extend(response.get("Items", []))
+    except ClientError as e:
+        print(f"DynamoDB scan failed in _scan_interactions_global: {e}")
+        return []
+
+    return items
+
+
 def _stringify_items(items: List[Dict[str, Any]]) -> List[str]:
+    """
+    Turn a list of dict items into a list of JSON strings.
+    Handles Decimal via default=str.
+    """
     results: List[str] = []
     for item in items:
-        try:
-            results.append(json.dumps(item, ensure_ascii=False))
-        except TypeError:
-            results.append(str(item))
+        results.append(_safe_json(item))
     return results
 
 
+# --------- ACTION IMPLEMENTATIONS --------- #
+
 def action_group_query_user_data(parameters: List[Dict[str, Any]]) -> List[str]:
+    """
+    Read user data by phone_number.
+    """
     phone_number = _get_param(parameters, "phone_number")
     if not phone_number:
         return ["phone_number is required for QueryUserData"]
 
+    if not USER_DATA_TABLE:
+        return ["USER_DATA_TABLE environment variable is not set"]
+
     items = _get_user_data(USER_DATA_TABLE, phone_number)
     if not items:
-        return ["No matching user data found"]
-    return _stringify_items(items)
+        return [
+            _safe_json(
+                {
+                    "user": None,
+                    "phone_number": phone_number,
+                    "message": "No matching user data found",
+                }
+            )
+        ]
+
+    user = items[0]
+    return [_safe_json({"user": user})]
+
+
+def action_group_update_user_name(parameters: List[Dict[str, Any]]) -> List[str]:
+    """
+    Update the Name field for a user identified by phone_number.
+    """
+    phone_number = _get_param(parameters, "phone_number")
+    new_name = _get_param(parameters, "name")
+
+    if not phone_number:
+        return ["phone_number is required for UpdateUserName"]
+    if not new_name:
+        return ["name is required for UpdateUserName"]
+
+    if not USER_DATA_TABLE:
+        return ["USER_DATA_TABLE environment variable is not set"]
+
+    table = dynamodb.Table(USER_DATA_TABLE)
+
+    try:
+        response = table.update_item(
+            Key={"PhoneNumber": phone_number},
+            UpdateExpression="SET #N = :name",
+            ExpressionAttributeNames={"#N": "Name"},
+            ExpressionAttributeValues={":name": new_name},
+            ReturnValues="ALL_NEW",
+        )
+        updated = response.get("Attributes")
+        if not updated:
+            return [
+                _safe_json(
+                    {
+                        "user": None,
+                        "phone_number": phone_number,
+                        "message": "User not found to update",
+                    }
+                )
+            ]
+
+        return [
+            _safe_json(
+                {
+                    "user": updated,
+                    "message": "Name updated successfully",
+                }
+            )
+        ]
+    except ClientError as e:
+        print(f"DynamoDB update_item failed: {e}")
+        return [
+            _safe_json(
+                {
+                    "error": "Failed to update user name",
+                    "details": str(e),
+                    "phone_number": phone_number,
+                }
+            )
+        ]
 
 
 def action_group_query_interaction_history(
     parameters: List[Dict[str, Any]]
 ) -> List[str]:
-    partition_key = _get_param(parameters, "partition_key")
-    sort_key_prefix = _get_param(parameters, "sort_key_prefix") or ""
-    if not partition_key:
-        return ["partition_key is required for QueryInteractionHistory"]
+    """
+    Unified QueryInteractionHistory:
 
-    items = _query_interaction_table(INTERACTION_TABLE, partition_key, sort_key_prefix)
+    Parameters:
+    - phone_number (string, optional):
+        If provided -> limit results to this user.
+        If omitted -> search across all users.
+    - start_date (string, optional): YYYY-MM-DD
+    - end_date (string, optional): YYYY-MM-DD
+
+    Returns:
+    - JSON string with:
+      { "interactions": [...], "phone_number": ..., "start_date": ..., "end_date": ... }
+    """
+    phone_number = _get_param(parameters, "phone_number")
+    start_date = _get_param(parameters, "start_date")
+    end_date = _get_param(parameters, "end_date")
+
+    if not INTERACTION_TABLE:
+        return ["INTERACTION_TABLE environment variable is not set"]
+
+    # Decide whether to query per-user or scan globally
+    if phone_number:
+        items = _query_user_interactions(
+            INTERACTION_TABLE, phone_number, start_date, end_date
+        )
+    else:
+        items = _scan_interactions_global(
+            INTERACTION_TABLE, start_date, end_date
+        )
+
     if not items:
-        return ["No matching interaction history found"]
-    return _stringify_items(items)
+        return [
+            _safe_json(
+                {
+                    "interactions": [],
+                    "message": "No matching interaction history found",
+                    "phone_number": phone_number,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                }
+            )
+        ]
 
+    return [
+        _safe_json(
+            {
+                "interactions": items,
+                "phone_number": phone_number,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+        )
+    ]
+
+
+# --------- MAIN LAMBDA HANDLER --------- #
 
 def lambda_handler(event, context):
-    action_group = event.get("actionGroup")
-    _function = event.get("function")
-    parameters = event.get("parameters", [])
+    """
+    Main handler for Bedrock Agents action group.
 
-    if action_group == "QueryUserData":
+    Response schema:
+
+    {
+      "messageVersion": "1.0",
+      "response": {
+        "actionGroup": "<ActionGroupName>",
+        "function": "<FunctionName>",
+        "functionResponse": {
+          "responseBody": {
+            "TEXT": {
+              "body": "<string>"
+            }
+          }
+        }
+      }
+    }
+    """
+    print("Received event:", _safe_json(event))
+
+    action_group = event.get("actionGroup")
+    function_name = event.get("function")
+    parameters = event.get("parameters", []) or []
+
+    # Route based on function name first
+    if function_name == "QueryUserData":
         results = action_group_query_user_data(parameters)
-    elif action_group == "QueryInteractionHistory":
+    elif function_name == "UpdateUserName":
+        results = action_group_update_user_name(parameters)
+    elif function_name == "QueryInteractionHistory":
         results = action_group_query_interaction_history(parameters)
     else:
-        raise ValueError(f"Action Group <{action_group}> not supported.")
+        # Fallback by actionGroup if function is missing/blank
+        if action_group == "QueryUserData":
+            results = action_group_query_user_data(parameters)
+        elif action_group == "QueryInteractionHistory":
+            results = action_group_query_interaction_history(parameters)
+        else:
+            results = [
+                f"Action Group or function <{action_group}:{function_name}> not supported."
+            ]
+
+    body_text = "\n".join(results)
+    message_version = event.get("messageVersion") or "1.0"
 
     response_body = {
-        "TEXT": {"body": "\n".join(results)},
-        "results": results,
+        "TEXT": {
+            "body": body_text
+        }
     }
 
     action_response = {
         "actionGroup": action_group,
-        "function": _function,
-        "functionResponse": {"responseBody": response_body},
+        "function": function_name,
+        "functionResponse": {
+            "responseBody": response_body
+        }
     }
 
-    function_response = {
-        "response": action_response,
-        "messageVersion": event.get("messageVersion"),
+    return {
+        "messageVersion": message_version,
+        "response": action_response
     }
-
-    return function_response
