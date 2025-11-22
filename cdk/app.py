@@ -9,6 +9,7 @@ import aws_cdk as cdk
 # Own imports
 from helpers.add_tags import add_tags_to_app
 from stacks.cdk_chatbot_api_stack import ChatbotAPIStack
+from stacks.cdk_db_agent_stack import DbAgentStack
 
 
 print("--> Deployment AWS configuration (safety first):")
@@ -43,5 +44,22 @@ add_tags_to_app(
     MAIN_RESOURCES_NAME,
     DEPLOYMENT_ENVIRONMENT,
 )
+
+if APP_CONFIG.get("enable_db_agent", False):
+    DbAgentStack(
+        app,
+        f"{MAIN_RESOURCES_NAME}-db-agent-{DEPLOYMENT_ENVIRONMENT}",
+        environment_name=DEPLOYMENT_ENVIRONMENT,
+        main_resources_name=MAIN_RESOURCES_NAME,
+        account_id=os.environ.get("CDK_DEFAULT_ACCOUNT"),
+        app_config=APP_CONFIG,
+        env={
+            "account": os.environ.get("CDK_DEFAULT_ACCOUNT"),
+            "region": os.environ.get("CDK_DEFAULT_REGION"),
+        },
+        description=(
+            f"Stack for {MAIN_RESOURCES_NAME} DB agent infrastructure in {DEPLOYMENT_ENVIRONMENT} environment"
+        ),
+    )
 
 app.synth()
