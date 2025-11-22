@@ -12,6 +12,10 @@ MODELS_REQUIRING_INFERENCE_PROFILE = {
 USER_DATA_TABLE_DEFAULT_NAME = "UserData"
 USER_DATA_TABLE_USER_TYPE_INDEX_NAME = "UserTypeIndex"
 
+# New: well-known attribute name for storing the Bedrock system response JSON
+# on each interaction-history record in the main DynamoDB table.
+INTERACTION_SYSTEM_RESPONSE_ATTRIBUTE_NAME = "system_response"
+
 # External imports
 from aws_cdk import (
     Duration,
@@ -138,7 +142,18 @@ class ChatbotAPIStack(Stack):
     def create_dynamodb_table(self) -> None:
         """
         Create DynamoDB table for storing the conversations.
+
+        Keys:
+        - PK (string): Partition key for conversation / phone_number.
+        - SK (string): Sort key, usually a timestamp-based identifier.
+
+        Each history record may also include:
+        - "{INTERACTION_SYSTEM_RESPONSE_ATTRIBUTE_NAME}": a **non-mandatory**
+          JSON attribute holding the full Bedrock system response for that step.
+          This attribute is not part of the key schema and is stored schemalessly
+          per item.
         """
+
         self.dynamodb_table = aws_dynamodb.Table(
             self,
             "DynamoDB-Table-Chatbot",
@@ -156,6 +171,12 @@ class ChatbotAPIStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
+
+        # Note:
+        # DynamoDB does not require explicit schema declaration for non-key
+        # attributes. Your Lambda can now write an attribute named
+        # INTERACTION_SYSTEM_RESPONSE_ATTRIBUTE_NAME (i.e. "system_response")
+        # containing a JSON map representing the Bedrock response payload.
 
     def create_user_data_table(self) -> None:
         """
@@ -459,6 +480,9 @@ class ChatbotAPIStack(Stack):
                     else USER_DATA_TABLE_DEFAULT_NAME
                 ),
             ),
+            # Optional: expose the attribute name for the system response so the
+            # Lambda code can reference it without hard-coding the string.
+            "SYSTEM_RESPONSE_ATTRIBUTE": INTERACTION_SYSTEM_RESPONSE_ATTRIBUTE_NAME,
         }
 
         optional_values: Dict[str, Optional[str]] = {
@@ -1788,7 +1812,10 @@ b. פרטי הזמנה נוכחית (עיר בה מתקיים האירוע, תא
                                 name="QueryInteractionHistory",
                                 description=(
                                     "Fetch historical conversation records using "
-                                    "the interaction table keys."
+                                    "the interaction table keys. Each record may "
+                                    f"include a '{INTERACTION_SYSTEM_RESPONSE_ATTRIBUTE_NAME}' "
+                                    "JSON attribute representing the Bedrock "
+                                    "system response used at that step."
                                 ),
                                 parameters={
                                     "partition_key": aws_bedrock.CfnAgent.ParameterDetailProperty(
