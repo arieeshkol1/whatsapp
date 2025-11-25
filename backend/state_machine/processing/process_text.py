@@ -624,8 +624,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
                 extra={"session_id": session_id},
             )
             return (
-                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. "
-                "אנא נסה/י שוב מאוחר יותר."
+                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. " "אנא נסה/י שוב מאוחר יותר."
             )
 
         completion_chunks: List[str] = []
@@ -641,7 +640,9 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
                     completion_chunks.append(bytes_value.decode("utf-8"))
                 except Exception:
                     completion_chunks.append(
-                        bytes_value if isinstance(bytes_value, str) else str(bytes_value)
+                        bytes_value
+                        if isinstance(bytes_value, str)
+                        else str(bytes_value)
                     )
         except EventStreamError as ese:
             logger.error(
@@ -652,8 +653,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
                 },
             )
             return (
-                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. "
-                "אנא נסה/י שוב מאוחר יותר."
+                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. " "אנא נסה/י שוב מאוחר יותר."
             )
 
         combined = "".join(completion_chunks).strip()
@@ -662,10 +662,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
     except Exception:
         logger.exception("Failed to invoke Business-Owner-Agent")
         # Safe Hebrew fallback
-        return (
-            "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. "
-            "אנא נסה/י שוב מאוחר יותר."
-        )
+        return "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. " "אנא נסה/י שוב מאוחר יותר."
 
 
 class ProcessText(BaseStepFunction):
@@ -892,9 +889,8 @@ class ProcessText(BaseStepFunction):
                 assess_user_data = {}
 
             # 1) Prefer BusinessId stored on user_data (once Agent sets it)
-            candidate = (
-                assess_user_data.get("BusinessId")
-                or assess_user_data.get("BusinessID")
+            candidate = assess_user_data.get("BusinessId") or assess_user_data.get(
+                "BusinessID"
             )
             if candidate:
                 business_id = str(candidate).strip()
@@ -958,8 +954,7 @@ class ProcessText(BaseStepFunction):
                     },
                 )
                 ask_message = (
-                    "לא מצאתי מזהה עסק מקושר למספר שלך.\n"
-                    "מהו מספר העסק שברצונך לנהל?"
+                    "לא מצאתי מזהה עסק מקושר למספר שלך.\n" "מהו מספר העסק שברצונך לנהל?"
                 )
                 self.response_message = ask_message
                 self.event["response_message"] = ask_message
