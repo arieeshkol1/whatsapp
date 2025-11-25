@@ -159,13 +159,14 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
 
 
 def _normalize_user_type(user_type: Any) -> str:
-    """Return a normalised user type code."""
+    """Return a normalised user type code ("B" for business, otherwise "C")."""
 
     if isinstance(user_type, str):
         code = user_type.strip().upper()
         if code == "B":
             return "B"
 
+    # Default/fallback: treat as consumer.
     return "C"
 
 
@@ -646,7 +647,15 @@ class AssessChanges:
         pn = item.get("PhoneNumber")
         if isinstance(pn, str):
             item["PhoneNumber"] = pn.strip()
-        item["UserType"] = _normalize_user_type(item.get("UserType"))
+
+        # --- IMPORTANT CHANGE: derive UserType from existing UserType OR Type ---
+        raw_user_type = item.get("UserType")
+        if raw_user_type is None:
+            # Fallback to legacy/DB "Type" attribute (e.g., "B" / "C")
+            raw_user_type = item.get("Type")
+        item["UserType"] = _normalize_user_type(raw_user_type)
+        # -----------------------------------------------------------------------
+
         attributes = item.get("Attributes")
         if isinstance(attributes, dict):
             cleaned_attributes = _json_safe_value(attributes)
