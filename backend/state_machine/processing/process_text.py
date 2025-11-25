@@ -100,22 +100,21 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     return stripped
 
 
-def _history_partition_keys(from_number: Optional[str]) -> List[str]:
+def _history_partition_keys(to_number: Optional[str]) -> List[str]:
     """Return candidate partition keys for interaction history lookups."""
 
-    if from_number is None:
+    if to_number is None:
         return []
 
-    raw = str(from_number).strip()
+    raw = str(to_number).strip()
     if not raw:
         return []
 
-    without_prefix = raw.split("NUMBER#", maxsplit=1)[-1]
-    digits_only = "".join(ch for ch in without_prefix if ch.isdigit())
-    base = digits_only or without_prefix.lstrip("+")
+    digits_only = "".join(ch for ch in raw if ch.isdigit())
+    base = digits_only or raw.lstrip("+")
 
     candidates: List[str] = []
-    for candidate in (base, without_prefix, without_prefix.lstrip("+")):
+    for candidate in (base, raw, raw.lstrip("+")):
         if candidate and candidate not in candidates:
             candidates.append(candidate)
 
@@ -482,16 +481,24 @@ def _build_session_id(
     return session_identifier[:MAX_SESSION_ID_LENGTH]
 
 
-def _fetch_conversation_history(from_number: str, conversation_id: int) -> List[dict]:
-    if not _history_helper or not from_number or conversation_id < 1:
+def _fetch_conversation_history(
+    to_number: str, from_number: str, conversation_id: int
+) -> List[dict]:
+    if (
+        not _history_helper
+        or not to_number
+        or not from_number
+        or conversation_id < 1
+    ):
         return []
 
-    for partition_key in _history_partition_keys(from_number):
+    for partition_key in _history_partition_keys(to_number):
         try:
             history_items = _history_helper.query_by_conversation(
                 partition_key=partition_key,
                 conversation_id=conversation_id,
                 limit=CONVERSATION_HISTORY_LIMIT,
+                from_number=from_number,
             )
         except Exception:  # pragma: no cover - defensive logging
             logger.exception(
@@ -506,20 +513,20 @@ def _fetch_conversation_history(from_number: str, conversation_id: int) -> List[
     return []
 
 
-def _format_history_messages(items: List[dict], current_whatsapp_id: str) -> List[str]:
+def _format_history_messages(items: List[dict], current_sort_key: str) -> List[str]:
     history_lines: List[str] = []
     if not items:
         return history_lines
 
     sorted_items = sorted(items, key=lambda item: item.get("SK", ""))
     for item in sorted_items:
-        text = item.get("text")
-        whatsapp_id = item.get("whatsapp_id")
-        if not text or whatsapp_id == current_whatsapp_id:
+        text = item.get("user_message")
+        sort_key = item.get("SK")
+        if not text or (current_sort_key and sort_key == current_sort_key):
             continue
-        created_at = item.get("created_at")
+        timestamp = item.get("timestamp")
         history_lines.append(
-            f"[{created_at}] לקוח: {text}" if created_at else f"לקוח: {text}"
+            f"[{timestamp}] לקוח: {text}" if timestamp else f"לקוח: {text}"
         )
 
     return history_lines
@@ -586,16 +593,22 @@ class ProcessText(BaseStepFunction):
         message_payload = (
             self.event.get("input", {}).get("dynamodb", {}).get("NewImage", {})
         )
-        self.text = self.event.get("text") or message_payload.get("text", {}).get(
-            "S", "DEFAULT_RESPONSE"
-        )
+        self.text = self.event.get("text") or message_payload.get(
+            "user_message", {}
+        ).get("S")
         from_number = self.event.get("from_number") or message_payload.get(
             "from_number", {}
         ).get("S")
+        to_number = self.event.get("to_number") or message_payload.get(
+            "to_number", {}
+        ).get("S")
         conversation_id = self.event.get("conversation_id", 1)
-        current_whatsapp_id = self.event.get("whatsapp_id") or message_payload.get(
-            "whatsapp_id", {}
+        message_sort_key = self.event.get("message_sort_key") or message_payload.get(
+            "SK", {}
         ).get("S", "")
+        message_timestamp = self.event.get("timestamp") or message_payload.get(
+            "timestamp", {}
+        ).get("S")
         last_seen_at = self.event.get("last_seen_at")
         payload_last_seen = message_payload.get("last_seen_at")
         if not last_seen_at:
@@ -608,8 +621,10 @@ class ProcessText(BaseStepFunction):
 
         _touch_user_info_record(from_number, last_seen_at or datetime.utcnow())
 
-        history_items = _fetch_conversation_history(from_number, conversation_id)
-        history_lines = _format_history_messages(history_items, current_whatsapp_id)
+        history_items = _fetch_conversation_history(
+            to_number, from_number, conversation_id
+        )
+        history_lines = _format_history_messages(history_items, message_sort_key)
 
         customer_profile = load_customer_profile(from_number)
         customer_summary: Optional[str] = (
@@ -619,7 +634,7 @@ class ProcessText(BaseStepFunction):
         stored_user_profile = _load_user_info_profile(from_number)
         user_profile_context = _format_user_info_for_context(stored_user_profile)
 
-        partition_keys = _history_partition_keys(from_number)
+        partition_keys = _history_partition_keys(to_number)
         primary_partition_key = partition_keys[0] if partition_keys else None
         conversation_state: Dict[str, Any] = {}
         prompt_state: Dict[str, Any] = {}
@@ -808,15 +823,16 @@ class ProcessText(BaseStepFunction):
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
 
-        # Persist system_response onto the history item for this WhatsApp message
-        if _history_helper and current_whatsapp_id and system_response is not None:
+        # Persist system_response onto the history item for this message
+        if _history_helper and message_sort_key and system_response is not None:
             try:
                 # Use same JSON for system_response and legacy bedrock_response
                 _history_helper.update_system_response(
                     partition_keys,
-                    current_whatsapp_id,
+                    message_sort_key,
                     system_response,
                     system_response,
+                    correlation_id=self.event.get("correlation_id"),
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to attach system response to history item")

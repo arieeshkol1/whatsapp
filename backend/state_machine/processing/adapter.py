@@ -43,7 +43,7 @@ def _number_attr(value: Optional[Any]) -> Optional[Dict[str, str]]:
 
 
 TYPE_SPECIFIC_FIELDS = {
-    "text": ("message_body", "text"),
+    "text": ("message_body", "user_message"),
     "image": ("image_url", "image_url"),
     "video": ("video_url", "video_url"),
     "voice": ("voice_url", "voice_url"),
@@ -80,13 +80,13 @@ class Adapter(BaseStepFunction):
         message_body = payload.get("message_body")
         wa_id = payload.get("wa_id")
         last_seen_at = payload.get("last_seen_at")
-        message_id = payload.get("message_id")
         correlation_id = payload.get("correlation_id") or raw_event.get(
             "correlation_id"
         )
         conversation_id = payload.get("conversation_id") or raw_event.get(
             "conversation_id"
         )
+        message_timestamp = payload.get("message_timestamp")
 
         new_image: Dict[str, Dict[str, str]] = {}
 
@@ -94,9 +94,9 @@ class Adapter(BaseStepFunction):
             ("type", message_type),
             ("from_number", from_number),
             ("to_number", to_number),
-            ("whatsapp_id", wa_id),
             ("last_seen_at", last_seen_at),
-            ("message_id", message_id),
+            ("SK", message_timestamp),
+            ("timestamp", message_timestamp),
             ("correlation_id", correlation_id),
         ):
             attr = _string_attr(value)
@@ -114,13 +114,13 @@ class Adapter(BaseStepFunction):
             if specific_attr:
                 new_image[target_key] = specific_attr
         elif message_type == "text" and message_body:
-            new_image.setdefault("text", _string_attr(message_body))
+            new_image.setdefault("user_message", _string_attr(message_body))
 
-        if message_type == "text" and "text" not in new_image:
-            new_image["text"] = _string_attr(message_body)
+        if message_type == "text" and "user_message" not in new_image:
+            new_image["user_message"] = _string_attr(message_body)
 
         if message_type != "text":
-            new_image.pop("text", None)
+            new_image.pop("user_message", None)
 
         adapter_output: Dict[str, Any] = {
             "input": {"dynamodb": {"NewImage": new_image}},
@@ -131,12 +131,13 @@ class Adapter(BaseStepFunction):
             "from_number": from_number,
             "to_number": to_number,
             "message_type": message_type,
-            "whatsapp_id": wa_id,
             "last_seen_at": last_seen_at,
-            "message_id": message_id,
+            "message_sort_key": message_timestamp,
+            "timestamp": message_timestamp,
         }
         if message_type == "text":
             derived_fields["text"] = message_body
+            derived_fields["user_message"] = message_body
 
         if conversation_id is not None:
             try:

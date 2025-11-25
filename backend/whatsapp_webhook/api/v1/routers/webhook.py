@@ -118,7 +118,7 @@ async def post_chatbot_webhook(
         wpp_id = message["id"]
         wpp_timestamp = message["timestamp"]
         wpp_type = message["type"]
-        created_at_dt = datetime.now(timezone.utc)
+        created_at_dt = datetime.now().astimezone()
         created_at = created_at_dt.isoformat()
 
         # Initialize the Message Model based on the type of message
@@ -126,19 +126,30 @@ async def post_chatbot_webhook(
         normalized_from_number = _normalize_phone_number(wpp_from_phone_number)
 
         if wpp_type == "text":
+            to_number = metadata.get("display_phone_number") if metadata else None
+            normalized_to_number = _normalize_phone_number(to_number)
+
+            if not normalized_to_number:
+                logger.error("Missing destination phone number in webhook payload")
+                return {
+                    "error": "Destination phone number not provided",
+                    "details": "Unable to persist interaction without business number",
+                }
+
             conversation_id = _determine_conversation_id(
-                normalized_from_number, created_at_dt
+                normalized_to_number,
+                normalized_from_number,
+                created_at_dt,
             )
 
             message_item = TextMessageModel(
-                PK=normalized_from_number,
-                SK=f"MESSAGE#{created_at}",
+                PK=normalized_to_number,
+                SK=created_at,
+                to_number=normalized_to_number,
                 from_number=wpp_from_phone_number,
-                created_at=created_at,
+                timestamp=created_at,
                 type=wpp_type,
-                whatsapp_id=wpp_id,
-                whatsapp_timestamp=wpp_timestamp,
-                text=message["text"]["body"],
+                user_message=message["text"]["body"],
                 correlation_id=correlation_id,
                 conversation_id=conversation_id,
             )
@@ -191,15 +202,18 @@ def _extract_conversation_id_value(raw_value) -> int:
     return 0
 
 
-def _determine_conversation_id(phone_number: str, created_at: datetime) -> int:
+def _determine_conversation_id(
+    to_number: str, from_number: str, created_at: datetime
+) -> int:
     """Determine the conversation id for the incoming message."""
 
-    partition_keys = [phone_number, f"NUMBER#{phone_number}"]
-    latest_item = None
-    for partition_key in partition_keys:
-        latest_item = dynamodb_helper.get_latest_item_by_pk(partition_key)
-        if latest_item:
-            break
+    if not to_number or not from_number:
+        return 1
+
+    partition_keys = [to_number, f"NUMBER#{to_number}"]
+    latest_item = dynamodb_helper.get_latest_item_by_pk_and_from(
+        partition_keys, from_number
+    )
     if not latest_item:
         return 1
 
@@ -209,11 +223,11 @@ def _determine_conversation_id(phone_number: str, created_at: datetime) -> int:
     if last_conversation < 1:
         last_conversation = 1
 
-    last_created_at_raw = latest_item.get("created_at")
+    last_timestamp_raw = latest_item.get("timestamp")
     last_created_at: datetime | None = None
-    if isinstance(last_created_at_raw, str):
+    if isinstance(last_timestamp_raw, str):
         try:
-            last_created_at = datetime.fromisoformat(last_created_at_raw)
+            last_created_at = datetime.fromisoformat(last_timestamp_raw)
         except ValueError:
             last_created_at = None
 
@@ -282,6 +296,7 @@ def _build_state_machine_event(
         "channel": "whatsapp",
         "correlation_id": correlation_id,
         "conversation_id": conversation_id,
+        "message_timestamp": created_at,
     }
 
     if message_type == "image":

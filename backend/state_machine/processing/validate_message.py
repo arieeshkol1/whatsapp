@@ -39,13 +39,17 @@ class ValidateMessage(BaseStepFunction):
         raw_event = evt.get("raw_event", evt)
         dd = evt.get("input", {}).get("dynamodb", {})
 
+        to_number = None
+        message_sort_key = None
+
         new_image = dd.get("NewImage")
         if new_image:
             # Extract the needed fields from NewImage
             from_number = new_image.get("from_number", {}).get("S")
+            to_number = new_image.get("to_number", {}).get("S")
             msg_type = new_image.get("type", {}).get("S")
-            text = new_image.get("text", {}).get("S")
-            whatsapp_id = new_image.get("whatsapp_id", {}).get("S")
+            text = new_image.get("user_message", {}).get("S")
+            message_sort_key = new_image.get("SK", {}).get("S")
             correlation_id = new_image.get("correlation_id", {}).get("S")
             conversation_id_value = new_image.get("conversation_id", {}).get("N")
 
@@ -74,9 +78,15 @@ class ValidateMessage(BaseStepFunction):
                     or evt.get("from")
                 )
             if not text:
-                text = raw_event.get("message_body") or evt.get("text")
-            if not whatsapp_id:
-                whatsapp_id = raw_event.get("wa_id") or evt.get("whatsapp_id")
+                text = (
+                    raw_event.get("message_body")
+                    or raw_event.get("user_message")
+                    or evt.get("text")
+                )
+            if not message_sort_key:
+                message_sort_key = raw_event.get("message_timestamp") or evt.get(
+                    "message_sort_key"
+                )
             if not correlation_id:
                 correlation_id = raw_event.get("correlation_id") or evt.get(
                     "correlation_id"
@@ -101,13 +111,16 @@ class ValidateMessage(BaseStepFunction):
                 or evt.get("from_number")
                 or evt.get("from")
             )
+            to_number = raw_event.get("to") or evt.get("to_number")
             text = raw_event.get("message_body") or evt.get("text")
             msg_type = (
                 raw_event.get("message_type")
                 or evt.get("message_type")
                 or ("text" if text else None)
             )
-            whatsapp_id = raw_event.get("wa_id") or evt.get("whatsapp_id")
+            message_sort_key = raw_event.get("message_timestamp") or evt.get(
+                "message_sort_key"
+            )
             correlation_id = raw_event.get("correlation_id") or evt.get(
                 "correlation_id"
             )
@@ -123,8 +136,9 @@ class ValidateMessage(BaseStepFunction):
 
         # Required checks (tighten/relax to your needs)
         self._require(from_number, "NewImage.from_number.S is required")
+        self._require(to_number, "NewImage.to_number.S is required")
         self._require(msg_type, "NewImage.type.S is required")
-        self._require(whatsapp_id, "NewImage.whatsapp_id.S is required")
+        self._require(message_sort_key, "NewImage.SK.S is required")
 
         required_field, error_message = TYPE_REQUIREMENTS.get(msg_type, (None, None))
         if required_field:
@@ -162,7 +176,7 @@ class ValidateMessage(BaseStepFunction):
                 ),
                 "msg_type": msg_type,
                 "has_text": bool(text),
-                "whatsapp_id": whatsapp_id,
+                "message_sort_key": message_sort_key,
                 "correlation_id": correlation_id or "<none>",
                 "conversation_id": conversation_id,
             },
@@ -172,7 +186,10 @@ class ValidateMessage(BaseStepFunction):
         evt["validated"] = True
         evt["message_type"] = msg_type
         evt["from_number"] = from_number
-        evt["whatsapp_id"] = whatsapp_id
+        evt["to_number"] = to_number
+        evt["message_sort_key"] = message_sort_key
+        if message_sort_key:
+            evt.setdefault("timestamp", message_sort_key)
         evt["conversation_id"] = conversation_id
         if text:
             evt["text"] = text
