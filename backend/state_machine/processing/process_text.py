@@ -7,7 +7,7 @@ from html import unescape
 from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, EventStreamError
 
 from state_machine.base_step_function import BaseStepFunction
 from common.logger import custom_logger
@@ -102,7 +102,6 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
 
 def _history_partition_keys(from_number: Optional[str]) -> List[str]:
     """Return candidate partition keys for interaction history lookups."""
-
     if from_number is None:
         return []
 
@@ -555,8 +554,7 @@ def _parse_bedrock_json(raw: Optional[Any]) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError:
         return None
 
-    # If Bedrock wrapped JSON as a string, decode one more time:
-    #   raw -> "{...}" -> dict
+    # If Bedrock wrapped JSON as a string, decode one more time.
     if isinstance(parsed, str):
         try:
             nested = json.loads(parsed)
@@ -566,6 +564,107 @@ def _parse_bedrock_json(raw: Optional[Any]) -> Optional[Dict[str, Any]]:
             return nested if isinstance(nested, dict) else None
 
     return parsed if isinstance(parsed, dict) else None
+
+
+def _extract_business_id_candidate_from_text(text: Optional[str]) -> Optional[str]:
+    """
+    Extract a phone-like business_id from the current message text.
+
+    Example:
+        "972502649476"       -> "972502649476"
+        "מספר העסק 050-123" -> "050123"
+
+    Returns:
+        digits-only string if length >= 8, otherwise None.
+    """
+    if text is None:
+        return None
+
+    digits = "".join(ch for ch in str(text) if ch.isdigit())
+    if len(digits) >= 8:
+        return digits
+    return None
+
+
+# ----------------------------------------------------------------------
+# Business Owner Agent invocation helper
+# ----------------------------------------------------------------------
+def _call_business_owner_agent(session_id: str, input_text: str) -> str:
+    """
+    Invoke the Business-Owner-Agent Bedrock agent.
+
+    IMPORTANT:
+    - Consumer flow (C/empty) keeps using call_bedrock_agent (unchanged).
+    - This helper is ONLY for user_type == "B".
+
+    NOTE:
+    Previously you saw a validationException in CloudWatch:
+      "Invocation of model ID ... with on-demand throughput isn’t supported"
+    That is a configuration issue on the Agent's model. This function just
+    logs the error and returns a safe fallback message.
+    """
+    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6KNOO")
+    agent_alias_id = os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID", "TSTALIASID")
+
+    client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
+
+    try:
+        response = client.invoke_agent(
+            agentId=agent_id,
+            agentAliasId=agent_alias_id,
+            sessionId=session_id,
+            inputText=input_text,
+        )
+
+        completion_stream = response.get("completion")
+        if not completion_stream:
+            logger.warning(
+                "Business-Owner-Agent invoke_agent returned no completion stream",
+                extra={"session_id": session_id},
+            )
+            return (
+                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. "
+                "אנא נסה/י שוב מאוחר יותר."
+            )
+
+        completion_chunks: List[str] = []
+        try:
+            for event in completion_stream:
+                chunk = event.get("chunk")
+                if not chunk:
+                    continue
+                bytes_value = chunk.get("bytes")
+                if not bytes_value:
+                    continue
+                try:
+                    completion_chunks.append(bytes_value.decode("utf-8"))
+                except Exception:
+                    completion_chunks.append(
+                        bytes_value if isinstance(bytes_value, str) else str(bytes_value)
+                    )
+        except EventStreamError as ese:
+            logger.error(
+                "EventStreamError while reading Business-Owner-Agent completion stream",
+                extra={
+                    "session_id": session_id,
+                    "error": str(ese),
+                },
+            )
+            return (
+                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. "
+                "אנא נסה/י שוב מאוחר יותר."
+            )
+
+        combined = "".join(completion_chunks).strip()
+        return combined
+
+    except Exception:
+        logger.exception("Failed to invoke Business-Owner-Agent")
+        # Safe Hebrew fallback
+        return (
+            "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. "
+            "אנא נסה/י שוב מאוחר יותר."
+        )
 
 
 class ProcessText(BaseStepFunction):
@@ -591,6 +690,9 @@ class ProcessText(BaseStepFunction):
         )
         from_number = self.event.get("from_number") or message_payload.get(
             "from_number", {}
+        ).get("S")
+        to_number = self.event.get("to_number") or message_payload.get(
+            "to_number", {}
         ).get("S")
         conversation_id = self.event.get("conversation_id", 1)
         current_whatsapp_id = self.event.get("whatsapp_id") or message_payload.get(
@@ -690,6 +792,9 @@ class ProcessText(BaseStepFunction):
             },
         )
 
+        # ------------------------------------------------------------------
+        # Shared context (used mainly for the Consumer Agent path)
+        # ------------------------------------------------------------------
         context_sections: List[str] = []
 
         rules_text = get_rules_text()
@@ -712,8 +817,7 @@ class ProcessText(BaseStepFunction):
             context_sections.append(user_profile_context)
 
         context_sections.append(f"הודעת הלקוח כעת:\n{self.text}")
-
-        input_text = "\n\n".join(context_sections)
+        consumer_input_text = "\n\n".join(context_sections)
 
         session_identifier = _build_session_id(
             from_number=from_number,
@@ -722,14 +826,163 @@ class ProcessText(BaseStepFunction):
         )
 
         # ------------------------------------------------------------------
-        # Call Bedrock and normalise the response
+        # Determine user type:
+        # 1) Prefer metadata in the text itself (e.g. "[user_type=B]").
+        # 2) Fallback to assess_changes.user_data.UserType from the event.
+        # If nothing is known, treat as consumer ("C").
         # ------------------------------------------------------------------
-        raw_response = call_bedrock_agent(
-            session_id=session_identifier,
-            input_text=input_text,
-        )
+        user_type = "C"
 
-        # Start with the raw string as a fallback; override from JSON if possible
+        # 1) Try to detect user_type from a leading metadata line inside the text.
+        metadata_user_type = None
+        try:
+            if isinstance(self.text, str):
+                first_line = self.text.split("\n", 1)[0]
+                if "[user_type=" in first_line:
+                    # Example: "[phone=...] [user_type=B] [business_id=...]"
+                    for token in first_line.split("]"):
+                        if "user_type=" in token:
+                            idx = token.find("user_type=")
+                            if idx != -1:
+                                raw_val = token[idx + len("user_type=") :].strip(" []")
+                                if raw_val:
+                                    metadata_user_type = raw_val.strip().upper()
+                                    break
+        except Exception:
+            metadata_user_type = None
+
+        # 2) Read assess_changes.user_data.UserType from the event if available.
+        assess_user_type = None
+        try:
+            assess_user_type_value = (
+                self.event.get("assess_changes", {})
+                .get("user_data", {})
+                .get("UserType")
+            )
+            if assess_user_type_value:
+                assess_user_type = str(assess_user_type_value).strip().upper()
+        except Exception:  # pragma: no cover - safety
+            assess_user_type = None
+
+        # 3) Final decision: metadata wins over assess_changes.
+        if metadata_user_type in ("B", "C"):
+            user_type = metadata_user_type
+        elif assess_user_type in ("B", "C"):
+            user_type = assess_user_type
+        else:
+            user_type = "C"
+        # ------------------------------------------------------------------
+        # Route to the correct agent
+        # ------------------------------------------------------------------
+        if user_type == "B":
+            # --------------------------------------------------------------
+            # Business owner path → Business-Owner-Agent
+            # Resolve business_id for this business user if possible.
+            # --------------------------------------------------------------
+            business_id: Optional[str] = None
+            assess_user_data: Dict[str, Any] = {}
+            try:
+                assess_user_data_obj = self.event.get("assess_changes", {}).get(
+                    "user_data", {}
+                )
+                if isinstance(assess_user_data_obj, dict):
+                    assess_user_data = assess_user_data_obj
+            except Exception:  # pragma: no cover
+                assess_user_data = {}
+
+            # 1) Prefer BusinessId stored on user_data (once Agent sets it)
+            candidate = (
+                assess_user_data.get("BusinessId")
+                or assess_user_data.get("BusinessID")
+            )
+            if candidate:
+                business_id = str(candidate).strip()
+
+            # 2) If not present, try deriving from the current text (e.g. "972502649476")
+            if not business_id:
+                text_candidate = _extract_business_id_candidate_from_text(self.text)
+                if text_candidate:
+                    business_id = text_candidate
+
+            # 3) If still missing, fall back to the WhatsApp "to" number
+            if not business_id and to_number:
+                business_id = str(to_number).strip()
+
+            if business_id:
+                # Build compact metadata line to help the Business Agent tools.
+                meta_tokens: List[str] = []
+                if from_number:
+                    meta_tokens.append(f"[phone_number={from_number}]")
+                meta_tokens.append("[user_type=B]")
+                if to_number:
+                    meta_tokens.append(f"[to_number={to_number}]")
+                if business_id:
+                    meta_tokens.append(f"[business_id={business_id}]")
+
+                meta_line = " ".join(meta_tokens)
+
+                # Final text for Business-Owner-Agent:
+                # - first line: metadata
+                # - second: human-readable context
+                # - third: actual owner message
+                business_agent_input_sections = [
+                    meta_line,
+                    "Message from business owner:",
+                    str(self.text),
+                ]
+                business_input_text = "\n".join(business_agent_input_sections)
+
+                self.logger.info(
+                    "Routing message to Business-Owner-Agent",
+                    extra={
+                        "session_id": session_identifier,
+                        "user_type": user_type,
+                        "from_number": from_number,
+                        "business_id": business_id,
+                        "to_number": to_number,
+                    },
+                )
+                raw_response = _call_business_owner_agent(
+                    session_id=session_identifier,
+                    input_text=business_input_text,
+                )
+            else:
+                # Absolutely no way to infer business_id → ask the user once.
+                self.logger.info(
+                    "Business user has no known BusinessId and no inferable number – asking user to provide it.",
+                    extra={
+                        "session_id": session_identifier,
+                        "user_type": user_type,
+                        "from_number": from_number,
+                    },
+                )
+                ask_message = (
+                    "לא מצאתי מזהה עסק מקושר למספר שלך.\n"
+                    "מהו מספר העסק שברצונך לנהל?"
+                )
+                self.response_message = ask_message
+                self.event["response_message"] = ask_message
+                return self.event
+
+        else:
+            # Consumer (UserType = 'C' or missing/empty) → existing Consumer Agent
+            self.logger.info(
+                "Routing message to Consumer Agent (UserType = 'C' or empty)",
+                extra={
+                    "session_id": session_identifier,
+                    "user_type": user_type,
+                    "from_number": from_number,
+                },
+            )
+            raw_response = call_bedrock_agent(
+                session_id=session_identifier,
+                input_text=consumer_input_text,
+            )
+
+        # ------------------------------------------------------------------
+        # From here down everything is the same pattern:
+        # parse response, update profile/state, build final WhatsApp reply
+        # ------------------------------------------------------------------
         reply_text = raw_response or ""
         profile_updates: Dict[str, Any] = {}
         conversation_tag_updates: Dict[str, Any] = {}
