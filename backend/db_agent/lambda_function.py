@@ -1,27 +1,33 @@
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger.setLevel(LOG_LEVEL)
 
 dynamodb = boto3.resource("dynamodb")
 
 # -------------------- TABLES -------------------- #
 
-# Existing rules table - DO NOT MODIFY NAME
-RULES_TABLE_NAME = "aws-whatsapp-rules-dev"
+# Existing rules table - use env overrides if provided
+RULES_TABLE_NAME = os.getenv("RULES_TABLE_NAME") or os.getenv("RULES_TABLE")
+RULES_TABLE_NAME = RULES_TABLE_NAME or "aws-whatsapp-rules-dev"
 rules_table = dynamodb.Table(RULES_TABLE_NAME)
 
 # UserData table (already exists in your account)
-USERDATA_TABLE = dynamodb.Table("UserData")
+USERDATA_TABLE_NAME = os.getenv("USER_DATA_TABLE", "UserData")
+USERDATA_TABLE = dynamodb.Table(USERDATA_TABLE_NAME)
 
 # ✅ NEW: interaction history table (your real name)
-HISTORY_TABLE_NAME = "Interaction-history"
+HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE")
+HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
 
