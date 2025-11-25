@@ -1,419 +1,373 @@
 import json
+import logging
 import os
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-# Environment variables
-USER_DATA_TABLE = os.environ.get("USER_DATA_TABLE")
-INTERACTION_TABLE = os.environ.get("INTERACTION_TABLE")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+logger = logging.getLogger()
+logger.setLevel(LOG_LEVEL)
 
 dynamodb = boto3.resource("dynamodb")
 
+# -------------------- TABLES -------------------- #
 
-def _get_param(parameters: List[Dict[str, Any]], name: str) -> Optional[str]:
+# Existing rules table - use env overrides if provided
+RULES_TABLE_NAME = os.getenv("RULES_TABLE_NAME") or os.getenv("RULES_TABLE")
+RULES_TABLE_NAME = RULES_TABLE_NAME or "aws-whatsapp-rules-dev"
+rules_table = dynamodb.Table(RULES_TABLE_NAME)
+
+# UserData table (already exists in your account)
+USERDATA_TABLE_NAME = os.getenv("USER_DATA_TABLE", "UserData")
+USERDATA_TABLE = dynamodb.Table(USERDATA_TABLE_NAME)
+
+# ✅ NEW: interaction history table (your real name)
+HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE")
+HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
+history_table = dynamodb.Table(HISTORY_TABLE_NAME)
+
+
+# -------------------- HELPERS -------------------- #
+
+
+def build_success_response(action_group, function, message_version, payload):
     """
-    Helper to extract a parameter by name from the parameters list.
-
-    Supports:
-      { "name": "phone_number", "value": "+972..." }
-    and defensively:
-      { "name": "phone_number", "value": { "stringValue": "+972..." } }
+    Bedrock Agent expected response format:
+    {
+      "response": {
+        "actionGroup": ...,
+        "function": ...,
+        "functionResponse": {
+          "responseBody": {
+            "TEXT": {"body": "<json string>"}
+          }
+        }
+      },
+      "messageVersion": ...
+    }
     """
-    for param in parameters:
-        if param.get("name") != name:
-            continue
-
-        value = param.get("value")
-        if isinstance(value, str):
-            return value
-        if isinstance(value, dict) and "stringValue" in value:
-            return value["stringValue"]
-        if value is not None:
-            return str(value)
-
-    return None
-
-
-def _safe_json(data: Any) -> str:
-    """
-    JSON-dumps with handling for Decimal and other non-serializable types.
-    """
-    return json.dumps(data, ensure_ascii=False, default=str)
-
-
-def _get_user_data(
-    table_name: Optional[str],
-    phone_number: str,
-) -> List[Dict[str, Any]]:
-    """
-    Fetch user data from USER_DATA_TABLE by phone number.
-
-    IMPORTANT: "PhoneNumber" must match your DynamoDB PK name exactly.
-    """
-    if not table_name:
-        print("USER_DATA_TABLE env var not set")
-        return []
-
-    table = dynamodb.Table(table_name)
-
-    candidates = [phone_number]
-    trimmed = phone_number.strip()
-    if trimmed and trimmed not in candidates:
-        candidates.append(trimmed)
-
-    for candidate in candidates:
-        try:
-            response = table.get_item(Key={"PhoneNumber": candidate})
-        except ClientError as e:
-            print(f"DynamoDB get_item failed for {candidate}: {e}")
-            continue
-
-        item = response.get("Item") if isinstance(response, dict) else None
-        if item:
-            return [item]
-
-    return []
-
-
-def _query_user_interactions(
-    table_name: Optional[str],
-    phone_number: str,
-    start_date: Optional[str],
-    end_date: Optional[str],
-) -> List[Dict[str, Any]]:
-    """
-    Query interactions for a single user (by phone_number without '+').
-
-    Uses a Query on PK, and optionally filters by created_at based on
-    start_date / end_date (strings 'YYYY-MM-DD').
-
-    We do NOT try to be super fancy with SK ranges, we just:
-    - query all by PK
-    - optionally filter on created_at (string compare) in DynamoDB.
-    """
-    if not table_name:
-        print("INTERACTION_TABLE env var not set")
-        return []
-
-    pk = phone_number.lstrip("+")
-    print(
-        f"DEBUG: _query_user_interactions for PK={pk}, "
-        f"start_date={start_date}, end_date={end_date}"
-    )
-
-    table = dynamodb.Table(table_name)
-
-    key_condition = Key("PK").eq(pk)
-    query_kwargs: Dict[str, Any] = {"KeyConditionExpression": key_condition}
-
-    # Build FilterExpression on created_at if date filters are provided
-    filter_expr = None
-    if start_date and end_date:
-        # Include everything from start_date to end_date (inclusive).
-        # created_at is ISO like "2025-11-20T17:10:59.585566+00:00",
-        # so comparing with "2025-11-20" and "2025-11-21" works lexicographically.
-        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
-    elif start_date:
-        filter_expr = Attr("created_at").gte(start_date)
-    elif end_date:
-        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
-
-    if filter_expr is not None:
-        query_kwargs["FilterExpression"] = filter_expr
-
-    items: List[Dict[str, Any]] = []
-
-    try:
-        response = table.query(Limit=50, **query_kwargs)
-        print(f"DEBUG: first page item count={len(response.get('Items', []))}")
-        items.extend(response.get("Items", []))
-
-        while response.get("LastEvaluatedKey"):
-            response = table.query(
-                ExclusiveStartKey=response["LastEvaluatedKey"],
-                Limit=50,
-                **query_kwargs,
-            )
-            print(f"DEBUG: next page item count={len(response.get('Items', []))}")
-            items.extend(response.get("Items", []))
-    except ClientError as e:
-        print(f"DynamoDB query failed in _query_user_interactions: {e}")
-        return []
-
-    return items
-
-
-def _scan_interactions_global(
-    table_name: Optional[str],
-    start_date: Optional[str],
-    end_date: Optional[str],
-) -> List[Dict[str, Any]]:
-    """
-    Scan interactions across ALL users, optionally filtered by date range.
-
-    Uses Scan with FilterExpression on created_at.
-    """
-    if not table_name:
-        print("INTERACTION_TABLE env var not set")
-        return []
-
-    print(
-        f"DEBUG: _scan_interactions_global start_date={start_date}, "
-        f"end_date={end_date}"
-    )
-
-    table = dynamodb.Table(table_name)
-
-    filter_expr = None
-    if start_date and end_date:
-        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
-    elif start_date:
-        filter_expr = Attr("created_at").gte(start_date)
-    elif end_date:
-        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
-
-    scan_kwargs: Dict[str, Any] = {}
-    if filter_expr is not None:
-        scan_kwargs["FilterExpression"] = filter_expr
-
-    items: List[Dict[str, Any]] = []
-
-    try:
-        response = table.scan(Limit=50, **scan_kwargs)
-        print(f"DEBUG: first scan page item count={len(response.get('Items', []))}")
-        items.extend(response.get("Items", []))
-
-        while response.get("LastEvaluatedKey"):
-            response = table.scan(
-                ExclusiveStartKey=response["LastEvaluatedKey"],
-                Limit=50,
-                **scan_kwargs,
-            )
-            print(f"DEBUG: next scan page item count={len(response.get('Items', []))}")
-            items.extend(response.get("Items", []))
-    except ClientError as e:
-        print(f"DynamoDB scan failed in _scan_interactions_global: {e}")
-        return []
-
-    return items
-
-
-def _stringify_items(items: List[Dict[str, Any]]) -> List[str]:
-    """
-    Turn a list of dict items into a list of JSON strings.
-    Handles Decimal via default=str.
-    """
-    results: List[str] = []
-    for item in items:
-        results.append(_safe_json(item))
-    return results
-
-
-# --------- ACTION IMPLEMENTATIONS --------- #
-
-
-def action_group_query_user_data(parameters: List[Dict[str, Any]]) -> List[str]:
-    """
-    Read user data by phone_number.
-    """
-    phone_number = _get_param(parameters, "phone_number")
-    if not phone_number:
-        return ["phone_number is required for QueryUserData"]
-
-    if not USER_DATA_TABLE:
-        return ["USER_DATA_TABLE environment variable is not set"]
-
-    items = _get_user_data(USER_DATA_TABLE, phone_number)
-    if not items:
-        return [
-            _safe_json(
-                {
-                    "user": None,
-                    "phone_number": phone_number,
-                    "message": "No matching user data found",
-                }
-            )
-        ]
-
-    user = items[0]
-    return [_safe_json({"user": user})]
-
-
-def action_group_update_user_name(parameters: List[Dict[str, Any]]) -> List[str]:
-    """
-    Update the Name field for a user identified by phone_number.
-    """
-    phone_number = _get_param(parameters, "phone_number")
-    new_name = _get_param(parameters, "name")
-
-    if not phone_number:
-        return ["phone_number is required for UpdateUserName"]
-    if not new_name:
-        return ["name is required for UpdateUserName"]
-
-    if not USER_DATA_TABLE:
-        return ["USER_DATA_TABLE environment variable is not set"]
-
-    table = dynamodb.Table(USER_DATA_TABLE)
-
-    try:
-        response = table.update_item(
-            Key={"PhoneNumber": phone_number},
-            UpdateExpression="SET #N = :name",
-            ExpressionAttributeNames={"#N": "Name"},
-            ExpressionAttributeValues={":name": new_name},
-            ReturnValues="ALL_NEW",
-        )
-        updated = response.get("Attributes")
-        if not updated:
-            return [
-                _safe_json(
-                    {
-                        "user": None,
-                        "phone_number": phone_number,
-                        "message": "User not found to update",
+    return {
+        "response": {
+            "actionGroup": action_group,
+            "function": function,
+            "functionResponse": {
+                "responseBody": {
+                    "TEXT": {
+                        "body": json.dumps(payload, ensure_ascii=False)
                     }
-                )
-            ]
-
-        return [
-            _safe_json(
-                {
-                    "user": updated,
-                    "message": "Name updated successfully",
                 }
-            )
-        ]
-    except ClientError as e:
-        print(f"DynamoDB update_item failed: {e}")
-        return [
-            _safe_json(
-                {
-                    "error": "Failed to update user name",
-                    "details": str(e),
-                    "phone_number": phone_number,
-                }
-            )
-        ]
+            },
+        },
+        "messageVersion": message_version,
+    }
 
 
-def action_group_query_interaction_history(
-    parameters: List[Dict[str, Any]],
-) -> List[str]:
+def build_error_response(action_group, function, message_version, message, code="ERROR"):
+    payload = {
+        "status": "error",
+        "error_code": code,
+        "message": message,
+    }
+    return build_success_response(action_group, function, message_version, payload)
+
+
+# -------------------- BUSINESS RULES -------------------- #
+
+
+def get_business_rules(business_id: str) -> dict:
+    resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
+    item = resp.get("Item")
+    if not item:
+        raise KeyError(f"No rules found for business_id={business_id}")
+    rules_json = item.get("rules_json")
+    if not rules_json:
+        raise KeyError(f"rules_json missing for business_id={business_id}")
+    rules = json.loads(rules_json)
+    return {
+        "business_id": business_id,
+        "version": item.get("version", "v1"),
+        "rules": rules,
+    }
+
+
+def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    rules_table.put_item(
+        Item={
+            "PK": business_id,
+            "SK": "CURRENT",
+            "version": version,
+            "rules_json": json.dumps(rules, ensure_ascii=False),
+            "updated_at": now,
+        }
+    )
+    return {
+        "business_id": business_id,
+        "version": version,
+        "updated_at": now,
+    }
+
+
+# -------------------- USER DATA -------------------- #
+
+
+def update_user_business_id(phone_number: str, business_id: str) -> dict:
     """
-    Unified QueryInteractionHistory:
-
-    Parameters:
-    - phone_number (string, optional):
-        If provided -> limit results to this user.
-        If omitted -> search across all users.
-    - start_date (string, optional): YYYY-MM-DD
-    - end_date (string, optional): YYYY-MM-DD
-
-    Returns:
-    - JSON string with:
-      { "interactions": [...], "phone_number": ..., "start_date": ..., "end_date": ... }
+    Adds or updates the BusinessId field for the user in UserData table.
+    Does NOT modify any other fields.
     """
-    phone_number = _get_param(parameters, "phone_number")
-    start_date = _get_param(parameters, "start_date")
-    end_date = _get_param(parameters, "end_date")
+    now = datetime.now(timezone.utc).isoformat()
 
-    if not INTERACTION_TABLE:
-        return ["INTERACTION_TABLE environment variable is not set"]
+    USERDATA_TABLE.update_item(
+        Key={"PhoneNumber": phone_number},
+        UpdateExpression="SET BusinessId = :b, updated_at = :u",
+        ExpressionAttributeValues={":b": business_id, ":u": now},
+    )
 
-    # Decide whether to query per-user or scan globally
-    if phone_number:
-        items = _query_user_interactions(
-            INTERACTION_TABLE, phone_number, start_date, end_date
+    return {
+        "phone_number": phone_number,
+        "business_id": business_id,
+        "updated_at": now,
+    }
+
+
+# -------------------- INTERACTION HISTORY -------------------- #
+
+
+def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
+    """
+    Query the Interaction-history table.
+
+    Schema (from your sample):
+      PK = phone number (or other logical partition key)
+      SK = "MESSAGE#<ISO_TIMESTAMP>"
+
+    We get from Bedrock:
+      partition_key: used as PK
+      sort_key_prefix: date in 'YYYY-MM-DD' format
+
+    So we query:
+      PK = partition_key
+      SK begins_with "MESSAGE#<sort_key_prefix>"
+    """
+    sk_prefix = f"MESSAGE#{sort_key_prefix}"
+
+    try:
+        response = history_table.query(
+            KeyConditionExpression=Key("PK").eq(partition_key)
+            & Key("SK").begins_with(sk_prefix)
         )
-    else:
-        items = _scan_interactions_global(INTERACTION_TABLE, start_date, end_date)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "Unknown")
+        logger.exception("DynamoDB query failed: %s", code)
+        if code == "ResourceNotFoundException":
+            return {
+                "status": "error",
+                "error_code": "TABLE_NOT_FOUND",
+                "message": f"History table '{HISTORY_TABLE_NAME}' not found",
+            }
+        return {
+            "status": "error",
+            "error_code": "DDB_QUERY_ERROR",
+            "message": str(e),
+        }
 
-    if not items:
-        return [
-            _safe_json(
-                {
-                    "interactions": [],
-                    "message": "No matching interaction history found",
-                    "phone_number": phone_number,
-                    "start_date": start_date,
-                    "end_date": end_date,
-                }
-            )
-        ]
+    items = response.get("Items", [])
 
-    return [
-        _safe_json(
+    interactions = []
+    for item in items:
+        interactions.append(
             {
-                "interactions": items,
-                "phone_number": phone_number,
-                "start_date": start_date,
-                "end_date": end_date,
+                "pk": item.get("PK"),
+                "sk": item.get("SK"),
+                "conversation_id": item.get("conversation_id"),
+                "correlation_id": item.get("correlation_id"),
+                "created_at": item.get("created_at"),
+                "from_number": item.get("from_number"),
+                # to_number is not in your sample, but we try to read if exists
+                "to_number": item.get("to_number"),
+                "text": item.get("text"),
+                "type": item.get("type"),
+                "whatsapp_id": item.get("whatsapp_id"),
+                "whatsapp_timestamp": item.get("whatsapp_timestamp"),
             }
         )
-    ]
+
+    return {
+        "status": "ok",
+        "table": HISTORY_TABLE_NAME,
+        "partition_key": partition_key,
+        "sort_key_prefix": sort_key_prefix,
+        "count": len(interactions),
+        "interactions": interactions,
+    }
 
 
-# --------- MAIN LAMBDA HANDLER --------- #
+# -------------------- LAMBDA HANDLER -------------------- #
 
 
 def lambda_handler(event, context):
-    """
-    Main handler for Bedrock Agents action group.
+    try:
+        logger.info("Received event: %s", json.dumps(event, ensure_ascii=False))
 
-    Response schema:
+        action_group = event.get("actionGroup", "unknown")
+        function = event.get("function", "unknown")
+        message_version = event.get("messageVersion", "1.0")
 
-    {
-      "messageVersion": "1.0",
-      "response": {
-        "actionGroup": "<ActionGroupName>",
-        "function": "<FunctionName>",
-        "functionResponse": {
-          "responseBody": {
-            "TEXT": {
-              "body": "<string>"
-            }
-          }
-        }
-      }
-    }
-    """
-    print("Received event:", _safe_json(event))
+        # parameters: list of {name, type, value}
+        raw_params = event.get("parameters", []) or []
+        params = {p.get("name"): p.get("value") for p in raw_params if p.get("name")}
 
-    action_group = event.get("actionGroup")
-    function_name = event.get("function")
-    parameters = event.get("parameters", []) or []
+        # ---------------- EXISTING FUNCTIONS ---------------- #
 
-    # Route based on function name first
-    if function_name == "QueryUserData":
-        results = action_group_query_user_data(parameters)
-    elif function_name == "UpdateUserName":
-        results = action_group_update_user_name(parameters)
-    elif function_name == "QueryInteractionHistory":
-        results = action_group_query_interaction_history(parameters)
-    else:
-        # Fallback by actionGroup if function is missing/blank
-        if action_group == "QueryUserData":
-            results = action_group_query_user_data(parameters)
-        elif action_group == "QueryInteractionHistory":
-            results = action_group_query_interaction_history(parameters)
+        if function == "GetBusinessRules":
+            business_id = params.get("business_id")
+            if not business_id:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'business_id' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            try:
+                result = get_business_rules(business_id)
+                return build_success_response(
+                    action_group, function, message_version, result
+                )
+            except KeyError as e:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    str(e),
+                    code="NOT_FOUND",
+                )
+
+        elif function == "UpsertBusinessRules":
+            business_id = params.get("business_id")
+            rules_raw = params.get("rules")
+            version = params.get("version", "v1")
+
+            if not business_id:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'business_id' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            if rules_raw is None:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'rules' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            # rules_raw may be JSON string or dict
+            if isinstance(rules_raw, str):
+                try:
+                    rules = json.loads(rules_raw)
+                except json.JSONDecodeError:
+                    return build_error_response(
+                        action_group,
+                        function,
+                        message_version,
+                        "Invalid JSON in 'rules' parameter",
+                        code="INVALID_RULES_JSON",
+                    )
+            else:
+                rules = rules_raw
+
+            result = upsert_business_rules(business_id, version, rules)
+            return build_success_response(
+                action_group, function, message_version, result
+            )
+
+        elif function == "UpdateUserBusinessId":
+            phone = params.get("phone_number")
+            business_id = params.get("business_id")
+
+            if not phone:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'phone_number' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            if not business_id:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'business_id' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            result = update_user_business_id(phone, business_id)
+            return build_success_response(
+                action_group, function, message_version, result
+            )
+
+        # ---------------- NEW: QueryInteractionHistory ---------------- #
+
+        elif function == "QueryInteractionHistory":
+            # Current action group schema (from traces):
+            #   partition_key: string
+            #   sort_key_prefix: string (YYYY-MM-DD)
+            partition_key = params.get("partition_key")
+            sort_key_prefix = params.get("sort_key_prefix")
+
+            if not partition_key:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'partition_key' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            if not sort_key_prefix:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'sort_key_prefix' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            result = query_interaction_history(partition_key, sort_key_prefix)
+            return build_success_response(
+                action_group, function, message_version, result
+            )
+
+        # ---------------- UNSUPPORTED FUNCTION ---------------- #
+
         else:
-            results = [
-                f"Action Group or function <{action_group}:{function_name}> not supported."
-            ]
+            return build_error_response(
+                action_group,
+                function,
+                message_version,
+                f"Unsupported function: {function}",
+                code="UNSUPPORTED_FUNCTION",
+            )
 
-    body_text = "\n".join(results)
-    message_version = event.get("messageVersion") or "1.0"
-
-    response_body = {"TEXT": {"body": body_text}}
-
-    action_response = {
-        "actionGroup": action_group,
-        "function": function_name,
-        "functionResponse": {"responseBody": response_body},
-    }
-
-    return {"messageVersion": message_version, "response": action_response}
+    except Exception:
+        logger.exception("Unexpected error")
+        return build_error_response(
+            event.get("actionGroup", "unknown"),
+            event.get("function", "unknown"),
+            event.get("messageVersion", "1.0"),
+            "Internal error",
+            code="INTERNAL_ERROR",
+        )
