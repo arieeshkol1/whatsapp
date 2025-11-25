@@ -35,9 +35,7 @@ def build_success_response(action_group, function, message_version, payload):
             "function": function,
             "functionResponse": {
                 "responseBody": {
-                    "TEXT": {
-                        "body": json.dumps(payload, ensure_ascii=False)
-                    }
+                    "TEXT": {"body": json.dumps(payload, ensure_ascii=False)}
                 }
             },
         },
@@ -45,7 +43,9 @@ def build_success_response(action_group, function, message_version, payload):
     }
 
 
-def build_error_response(action_group, function, message_version, message, code="ERROR"):
+def build_error_response(
+    action_group, function, message_version, message, code="ERROR"
+):
     payload = {
         "status": "error",
         "error_code": code,
@@ -132,7 +132,9 @@ def lambda_handler(event, context):
 
             try:
                 result = get_business_rules(business_id)
-                return build_success_response(action_group, function, message_version, result)
+                return build_success_response(
+                    action_group, function, message_version, result
+                )
             except KeyError as e:
                 return build_error_response(
                     action_group,
@@ -182,7 +184,9 @@ def lambda_handler(event, context):
                 rules = rules_raw
 
             result = upsert_business_rules(business_id, version, rules)
-            return build_success_response(action_group, function, message_version, result)
+            return build_success_response(
+                action_group, function, message_version, result
+            )
 
         # ------- Unsupported function -------
         else:
