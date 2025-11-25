@@ -56,9 +56,7 @@ def build_success_response(action_group, function, message_version, payload):
             "function": function,
             "functionResponse": {
                 "responseBody": {
-                    "TEXT": {
-                        "body": json.dumps(payload, ensure_ascii=False)
-                    }
+                    "TEXT": {"body": json.dumps(payload, ensure_ascii=False)}
                 }
             },
         },
@@ -66,7 +64,9 @@ def build_success_response(action_group, function, message_version, payload):
     }
 
 
-def build_error_response(action_group, function, message_version, message, code="ERROR"):
+def build_error_response(
+    action_group, function, message_version, message, code="ERROR"
+):
     payload = {
         "status": "error",
         "error_code": code,
