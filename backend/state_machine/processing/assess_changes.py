@@ -30,6 +30,15 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from common.logger import custom_logger
 
+# Export the class and helper utilities for test discovery and reuse.
+__all__ = [
+    "AssessChanges",
+    "_extract_user_name",
+    "_json_safe_value",
+    "_normalize_user_type",
+    "_unwrap_attribute",
+]
+
 logger = custom_logger()
 _DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
 _HISTORY_LIMIT = 50
@@ -484,13 +493,11 @@ class AssessChanges:
                     {
                         "from_number": str(item.get("from_number", "")),
                         "type": str(item.get("type", "")),
-                        "text": str(item.get("text", "")),
-                        "timestamp": str(
-                            item.get("whatsapp_timestamp")
-                            or item.get("created_at")
-                            or ""
+                        "text": str(
+                            item.get("user_message") or item.get("text", "")
                         ),
-                        "whatsapp_id": str(item.get("whatsapp_id", "")),
+                        "timestamp": str(item.get("timestamp") or ""),
+                        "message_sort_key": str(item.get("SK", "")),
                     }
                 )
             if recent:

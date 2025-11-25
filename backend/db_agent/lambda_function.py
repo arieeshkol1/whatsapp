@@ -80,46 +80,51 @@ def _get_user_data(
 
 def _query_user_interactions(
     table_name: Optional[str],
-    phone_number: str,
+    to_number: str,
+    from_number: Optional[str],
     start_date: Optional[str],
     end_date: Optional[str],
 ) -> List[Dict[str, Any]]:
     """
-    Query interactions for a single user (by phone_number without '+').
+    Query interactions for a business (to_number) and optional customer (from_number).
 
-    Uses a Query on PK, and optionally filters by created_at based on
-    start_date / end_date (strings 'YYYY-MM-DD').
-
-    We do NOT try to be super fancy with SK ranges, we just:
-    - query all by PK
-    - optionally filter on created_at (string compare) in DynamoDB.
+    Uses the GSI_To_From index to isolate a single business and optionally a
+    specific customer.
     """
     if not table_name:
         print("INTERACTION_TABLE env var not set")
         return []
 
-    pk = phone_number.lstrip("+")
-    print(
-        f"DEBUG: _query_user_interactions for PK={pk}, "
-        f"start_date={start_date}, end_date={end_date}"
-    )
+    if not to_number:
+        print("to_number is required to query interactions")
+        return []
 
     table = dynamodb.Table(table_name)
 
-    key_condition = Key("PK").eq(pk)
-    query_kwargs: Dict[str, Any] = {"KeyConditionExpression": key_condition}
+    print(
+        f"DEBUG: _query_user_interactions for to_number={to_number}, "
+        f"from_number={from_number}, start_date={start_date}, end_date={end_date}"
+    )
 
-    # Build FilterExpression on created_at if date filters are provided
+    key_condition = Key("to_number").eq(to_number)
+    if from_number:
+        key_condition = key_condition & Key("from_number").eq(from_number.lstrip("+"))
+
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": key_condition,
+        "IndexName": "GSI_To_From",
+    }
+
+    # Build FilterExpression on timestamp if date filters are provided
     filter_expr = None
     if start_date and end_date:
-        # Include everything from start_date to end_date (inclusive).
-        # created_at is ISO like "2025-11-20T17:10:59.585566+00:00",
-        # so comparing with "2025-11-20" and "2025-11-21" works lexicographically.
-        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
+        filter_expr = Attr("timestamp").between(
+            start_date, end_date + "T99:99:99"
+        )
     elif start_date:
-        filter_expr = Attr("created_at").gte(start_date)
+        filter_expr = Attr("timestamp").gte(start_date)
     elif end_date:
-        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
+        filter_expr = Attr("timestamp").lte(end_date + "T99:99:99")
 
     if filter_expr is not None:
         query_kwargs["FilterExpression"] = filter_expr
@@ -154,7 +159,7 @@ def _scan_interactions_global(
     """
     Scan interactions across ALL users, optionally filtered by date range.
 
-    Uses Scan with FilterExpression on created_at.
+    Uses Scan with FilterExpression on timestamp.
     """
     if not table_name:
         print("INTERACTION_TABLE env var not set")
@@ -169,11 +174,11 @@ def _scan_interactions_global(
 
     filter_expr = None
     if start_date and end_date:
-        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
+        filter_expr = Attr("timestamp").between(start_date, end_date + "T99:99:99")
     elif start_date:
-        filter_expr = Attr("created_at").gte(start_date)
+        filter_expr = Attr("timestamp").gte(start_date)
     elif end_date:
-        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
+        filter_expr = Attr("timestamp").lte(end_date + "T99:99:99")
 
     scan_kwargs: Dict[str, Any] = {}
     if filter_expr is not None:
@@ -307,9 +312,10 @@ def action_group_query_interaction_history(
     Unified QueryInteractionHistory:
 
     Parameters:
-    - phone_number (string, optional):
-        If provided -> limit results to this user.
-        If omitted -> search across all users.
+    - to_number (string, required): business/WhatsApp destination number (PK)
+    - from_number | phone_number (string, optional):
+        If provided -> limit results to this customer.
+        If omitted -> return all customers for the business.
     - start_date (string, optional): YYYY-MM-DD
     - end_date (string, optional): YYYY-MM-DD
 
@@ -317,39 +323,49 @@ def action_group_query_interaction_history(
     - JSON string with:
       { "interactions": [...], "phone_number": ..., "start_date": ..., "end_date": ... }
     """
-    phone_number = _get_param(parameters, "phone_number")
+    to_number = _get_param(parameters, "to_number") or _get_param(
+        parameters, "business_number"
+    )
+    from_number = _get_param(parameters, "from_number") or _get_param(
+        parameters, "phone_number"
+    )
     start_date = _get_param(parameters, "start_date")
     end_date = _get_param(parameters, "end_date")
 
     if not INTERACTION_TABLE:
         return ["INTERACTION_TABLE environment variable is not set"]
 
+    if not to_number:
+        return ["to_number (business number) is required"]
+
     # Decide whether to query per-user or scan globally
-    if phone_number:
+    if to_number:
         items = _query_user_interactions(
-            INTERACTION_TABLE, phone_number, start_date, end_date
+            INTERACTION_TABLE, to_number, from_number, start_date, end_date
         )
     else:
         items = _scan_interactions_global(INTERACTION_TABLE, start_date, end_date)
 
     if not items:
         return [
-            _safe_json(
-                {
-                    "interactions": [],
-                    "message": "No matching interaction history found",
-                    "phone_number": phone_number,
-                    "start_date": start_date,
-                    "end_date": end_date,
-                }
-            )
+                    _safe_json(
+                        {
+                            "interactions": [],
+                            "message": "No matching interaction history found",
+                            "phone_number": from_number,
+                            "to_number": to_number,
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        }
+                    )
         ]
 
     return [
         _safe_json(
             {
                 "interactions": items,
-                "phone_number": phone_number,
+                "phone_number": from_number,
+                "to_number": to_number,
                 "start_date": start_date,
                 "end_date": end_date,
             }

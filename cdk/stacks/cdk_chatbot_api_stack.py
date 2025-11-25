@@ -172,6 +172,18 @@ class ChatbotAPIStack(Stack):
         )
         Tags.of(self.dynamodb_table).add("Name", self.app_config["table_name"])
 
+        # Enable lookups by business number + customer number
+        self.dynamodb_table.add_global_secondary_index(
+            index_name="GSI_To_From",
+            partition_key=aws_dynamodb.Attribute(
+                name="to_number", type=aws_dynamodb.AttributeType.STRING
+            ),
+            sort_key=aws_dynamodb.Attribute(
+                name="from_number", type=aws_dynamodb.AttributeType.STRING
+            ),
+            projection_type=aws_dynamodb.ProjectionType.ALL,
+        )
+
         # Note:
         # DynamoDB does not require explicit schema declaration for non-key
         # attributes. Your Lambda can now write an attribute named

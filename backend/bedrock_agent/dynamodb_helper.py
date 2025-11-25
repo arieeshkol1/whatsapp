@@ -2,7 +2,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
 # =====================================================================
@@ -138,12 +138,13 @@ def put_conversation_state(
 
 def update_system_response(
     partition_keys: List[str],
-    whatsapp_id: str,
+    sort_key: Optional[str],
     system_response: Dict[str, Any],
     legacy_raw_same_json: Optional[Dict[str, Any]] = None,
+    correlation_id: Optional[str] = None,
 ) -> None:
     """
-    Update the message item identified by whatsapp_id, under ANY valid PK.
+    Update the message item identified by sort_key (or correlation_id), under ANY valid PK.
 
     Writes ONLY ONE canonical attribute:
         system_response = { ... JSON ... }
@@ -155,22 +156,27 @@ def update_system_response(
         return
 
     for pk in partition_keys:
+        sk_candidate = sort_key
+
+        if correlation_id and not sk_candidate:
+            try:
+                result = table.query(
+                    KeyConditionExpression=Key("PK").eq(pk),
+                    FilterExpression=Attr("correlation_id").eq(correlation_id),
+                    Limit=1,
+                )
+                items = result.get("Items", [])
+                if items:
+                    sk_candidate = items[0].get("SK")
+            except ClientError as exc:
+                print(
+                    f"[DDB] ERROR scanning for correlation_id under PK={pk}: {exc}"
+                )
+
+        if not sk_candidate:
+            continue
+
         try:
-            # Query message item by PK + filter_expression for whatsapp_id
-            result = table.query(
-                KeyConditionExpression=Key("PK").eq(pk),
-                FilterExpression="whatsapp_id = :w",
-                ExpressionAttributeValues={":w": whatsapp_id},
-                Limit=1,
-            )
-
-            items = result.get("Items", [])
-            if not items:
-                continue  # Try next PK
-
-            item = items[0]
-            sk = item["SK"]
-
             # Build UpdateExpression
             update_expr = "SET #sys = :s"
             expr_names = {"#sys": SYSTEM_RESPONSE_ATTRIBUTE}
@@ -182,13 +188,14 @@ def update_system_response(
                 expr_values[":l"] = legacy_raw_same_json
 
             table.update_item(
-                Key={"PK": pk, "SK": sk},
+                Key={"PK": pk, "SK": sk_candidate},
                 UpdateExpression=update_expr,
                 ExpressionAttributeNames=expr_names,
                 ExpressionAttributeValues=expr_values,
+                ConditionExpression="attribute_exists(PK) AND attribute_exists(SK)",
             )
 
-            print(f"[DDB] system_response updated for PK={pk}, SK={sk}")
+            print(f"[DDB] system_response updated for PK={pk}, SK={sk_candidate}")
             return
 
         except ClientError as exc:

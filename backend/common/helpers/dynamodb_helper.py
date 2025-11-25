@@ -166,8 +166,59 @@ class DynamoDBHelper:
         items = response.get("Items") or []
         return items[0] if items else None
 
+    def get_latest_item_by_pk_and_from(
+        self, partition_keys: Iterable[str], from_number: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the latest item for a customer under any provided partition key."""
+
+        if not from_number:
+            return None
+
+        for partition_key in partition_keys:
+            if not partition_key:
+                continue
+
+            last_evaluated_key: Optional[Dict[str, Any]] = None
+            while True:
+                try:
+                    query_kwargs: Dict[str, Any] = {
+                        "KeyConditionExpression": Key("PK").eq(partition_key),
+                        "ScanIndexForward": False,
+                        "Limit": 25,
+                        "FilterExpression": Attr("from_number").eq(from_number),
+                    }
+                    if last_evaluated_key:
+                        query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+
+                    response = self.table.query(**query_kwargs)
+                except ClientError as error:
+                    logger.error(
+                        "get_latest_item_by_pk_and_from operation failed",
+                        extra={
+                            "table_name": self.table_name,
+                            "pk": partition_key,
+                            "from_number": from_number,
+                            "error": str(error),
+                        },
+                    )
+                    break
+
+                items = response.get("Items") or []
+                if items:
+                    return items[0]
+
+                last_evaluated_key = response.get("LastEvaluatedKey")
+                if not last_evaluated_key:
+                    break
+
+        return None
+
     def query_by_conversation(
-        self, partition_key: str, conversation_id: int, limit: int = 50
+        self,
+        partition_key: str,
+        conversation_id: int,
+        limit: int = 50,
+        from_number: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Return messages for a given partition and conversation id."""
 
@@ -185,10 +236,16 @@ class DynamoDBHelper:
 
         try:
             while True:
+                filter_expression = Attr("conversation_id").eq(conversation_id)
+                if from_number:
+                    filter_expression = filter_expression & Attr("from_number").eq(
+                        from_number
+                    )
+
                 query_kwargs: Dict[str, Any] = {
                     "KeyConditionExpression": Key("PK").eq(partition_key),
                     "ScanIndexForward": True,
-                    "FilterExpression": Attr("conversation_id").eq(conversation_id),
+                    "FilterExpression": filter_expression,
                     "Limit": limit,
                 }
                 if last_evaluated_key:
@@ -276,9 +333,10 @@ class DynamoDBHelper:
     def update_system_response(
         self,
         partition_keys: List[str],
-        whatsapp_id: str,
+        sort_key: Optional[str],
         system_response: Dict[str, Any],
         full_response: Optional[Dict[str, Any]] = None,
+        correlation_id: Optional[str] = None,
     ) -> None:
         """Attach system response metadata to a stored message.
 
@@ -286,52 +344,57 @@ class DynamoDBHelper:
         message is found.
         """
 
-        if not whatsapp_id or not system_response:
+        if not system_response:
             return
 
         for partition_key in partition_keys:
             if not partition_key:
                 continue
 
-            last_evaluated_key: Optional[Dict[str, Any]] = None
-            sort_key: Optional[str] = None
+            sort_key_candidate: Optional[str] = sort_key
 
-            while True:
-                try:
-                    query_kwargs: Dict[str, Any] = {
-                        "KeyConditionExpression": Key("PK").eq(partition_key),
-                        "FilterExpression": Attr("whatsapp_id").eq(whatsapp_id),
-                        "Limit": 25,
-                        "ScanIndexForward": False,
-                    }
-                    if last_evaluated_key:
-                        query_kwargs["ExclusiveStartKey"] = last_evaluated_key
+            if correlation_id and not sort_key_candidate:
+                last_evaluated_key: Optional[Dict[str, Any]] = None
+                while True:
+                    try:
+                        query_kwargs: Dict[str, Any] = {
+                            "KeyConditionExpression": Key("PK").eq(partition_key),
+                            "FilterExpression": Attr("correlation_id").eq(
+                                correlation_id
+                            ),
+                            "Limit": 25,
+                            "ScanIndexForward": False,
+                        }
+                        if last_evaluated_key:
+                            query_kwargs["ExclusiveStartKey"] = last_evaluated_key
 
-                    response = self.table.query(**query_kwargs)
-                except ClientError as error:
-                    logger.error(
-                        "Failed to query message for system response attachment",
-                        extra={
-                            "table_name": self.table_name,
-                            "pk": partition_key,
-                            "whatsapp_id": whatsapp_id,
-                            "error": str(error),
-                        },
-                    )
-                    break
-
-                items = response.get("Items") if isinstance(response, dict) else None
-                if items:
-                    sort_key_candidate = items[0].get("SK")
-                    if isinstance(sort_key_candidate, str):
-                        sort_key = sort_key_candidate
+                        response = self.table.query(**query_kwargs)
+                    except ClientError as error:
+                        logger.error(
+                            "Failed to query message for system response attachment",
+                            extra={
+                                "table_name": self.table_name,
+                                "pk": partition_key,
+                                "correlation_id": correlation_id,
+                                "error": str(error),
+                            },
+                        )
                         break
 
-                last_evaluated_key = response.get("LastEvaluatedKey")
-                if not last_evaluated_key:
-                    break
+                    items = (
+                        response.get("Items") if isinstance(response, dict) else None
+                    )
+                    if items:
+                        candidate = items[0].get("SK")
+                        if isinstance(candidate, str):
+                            sort_key_candidate = candidate
+                            break
 
-            if not sort_key:
+                    last_evaluated_key = response.get("LastEvaluatedKey")
+                    if not last_evaluated_key:
+                        break
+
+            if not sort_key_candidate:
                 continue
 
             try:
@@ -342,9 +405,10 @@ class DynamoDBHelper:
                 }
 
                 update_kwargs: Dict[str, Any] = {
-                    "Key": {"PK": partition_key, "SK": sort_key},
+                    "Key": {"PK": partition_key, "SK": sort_key_candidate},
                     "UpdateExpression": update_expression,
                     "ExpressionAttributeValues": expression_attribute_values,
+                    "ConditionExpression": "attribute_exists(PK) AND attribute_exists(SK)",
                 }
 
                 self.table.update_item(**update_kwargs)
@@ -355,8 +419,8 @@ class DynamoDBHelper:
                     extra={
                         "table_name": self.table_name,
                         "pk": partition_key,
-                        "sk": sort_key,
-                        "whatsapp_id": whatsapp_id,
+                        "sk": sort_key_candidate,
+                        "correlation_id": correlation_id,
                         "error": str(error),
                     },
                 )

@@ -441,13 +441,11 @@ class SendMessage(BaseStepFunction):
             .get("from_number", {})
             .get("S")
         )
-        original_message_id = (
-            self.event.get("input", {})
-            .get("dynamodb", {})
-            .get("NewImage", {})
-            .get("whatsapp_id", {})
-            .get("S")
+        original_message_id = self.event.get("whatsapp_id") or self.event.get(
+            "wa_id"
         )
+        if not original_message_id:
+            original_message_id = self.event.get("input", {}).get("message_id")
         phone_number = _normalize_to_e164(phone_number_raw)
 
         self.logger.info(
