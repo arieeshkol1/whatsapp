@@ -75,6 +75,18 @@ def create_table(table_name: str, dynamodb_resource: Any, stream_enabled: bool) 
         AttributeDefinitions=[
             {"AttributeName": "PK", "AttributeType": "S"},
             {"AttributeName": "SK", "AttributeType": "S"},
+            {"AttributeName": "to_number", "AttributeType": "S"},
+            {"AttributeName": "from_number", "AttributeType": "S"},
+        ],
+        GlobalSecondaryIndexes=[
+            {
+                "IndexName": "GSI_To_From",
+                "KeySchema": [
+                    {"AttributeName": "to_number", "KeyType": "HASH"},
+                    {"AttributeName": "from_number", "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            }
         ],
         BillingMode="PAY_PER_REQUEST",
         StreamSpecification={

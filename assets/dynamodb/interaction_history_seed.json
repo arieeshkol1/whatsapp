@@ -1,22 +1,17 @@
 [
   {
-    "PK": "972524347196",
-    "SK": "MESSAGE#2025-11-20T10:00:00Z",
+    "PK": "972502649476",
+    "SK": "2025-11-25T13:45:42.025363+02:00",
+    "to_number": "972502649476",
+    "from_number": "972502645673",
+    "timestamp": "2025-11-25T13:45:42.025363+02:00",
     "conversation_id": 1,
-    "correlation_id": "seed-correlation-id",
-    "created_at": "2025-11-20T10:00:00Z",
-    "from_number": "972524347196",
-    "text": "sample message",
-    "type": "text",
-    "whatsapp_id": "wamid.sample",
-    "whatsapp_timestamp": "1763634291",
+    "correlation_id": "a1eb3bb6-9867-451f-8336-f8f2a75cbb2d",
+    "user_message": "מהם המספרים שמהם קיבלתי הודעות ?",
     "system_response": {
-      "reply": "Hello from Bedrock seed",
-      "metadata": {
-        "model": "amazon.nova-lite-v1:0",
-        "finish_reason": "stop"
-      },
-      "user_updates": []
-    }
+      "raw_response": "כדי לספק לך את המידע המדויק, אנא ציין תאריך ספציפי או טווח תאריכים שבו ברצונך לבדוק את ההודעות."
+    },
+    "raw_response": "כדי לספק לך את המידע המדויק, אנא ציין תאריך ספציפי או טווח תאריכים שבו ברצונך לבדוק את ההודעות.",
+    "type": "text"
   }
 ]
