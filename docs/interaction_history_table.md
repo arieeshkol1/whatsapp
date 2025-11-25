@@ -3,7 +3,9 @@
 Use `scripts/recreate_interaction_history_table.py` to drop and recreate the
 `Interaction-history` table with the canonical Bedrock response attribute
 (`system_response`). The seed file stores the full Bedrock response JSON so new
-tables are created with example items that match the latest data model.
+tables are created with example items that match the latest data model
+(business `to_number` + local-time ISO timestamp, plus a `GSI_To_From` index on
+`to_number`/`from_number`).
 
 ## Commands
 

@@ -142,24 +142,18 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
     """
     Query the Interaction-history table.
 
-    Schema (from your sample):
-      PK = phone number (or other logical partition key)
-      SK = "MESSAGE#<ISO_TIMESTAMP>"
+    Schema (updated):
+      PK = WhatsApp business "to" number
+      SK = local-time ISO 8601 timestamp
 
     We get from Bedrock:
       partition_key: used as PK
-      sort_key_prefix: date in 'YYYY-MM-DD' format
-
-    So we query:
-      PK = partition_key
-      SK begins_with "MESSAGE#<sort_key_prefix>"
+      sort_key_prefix: date in 'YYYY-MM-DD' format (matched against SK prefix)
     """
-    sk_prefix = f"MESSAGE#{sort_key_prefix}"
-
     try:
         response = history_table.query(
             KeyConditionExpression=Key("PK").eq(partition_key)
-            & Key("SK").begins_with(sk_prefix)
+            & Key("SK").begins_with(sort_key_prefix)
         )
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code", "Unknown")
@@ -184,16 +178,15 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
             {
                 "pk": item.get("PK"),
                 "sk": item.get("SK"),
+                "timestamp": item.get("timestamp") or item.get("SK"),
                 "conversation_id": item.get("conversation_id"),
                 "correlation_id": item.get("correlation_id"),
-                "created_at": item.get("created_at"),
                 "from_number": item.get("from_number"),
-                # to_number is not in your sample, but we try to read if exists
-                "to_number": item.get("to_number"),
-                "text": item.get("text"),
+                "to_number": item.get("to_number") or item.get("PK"),
+                "user_message": item.get("user_message") or item.get("text"),
+                "system_response": item.get("system_response"),
+                "raw_response": item.get("raw_response"),
                 "type": item.get("type"),
-                "whatsapp_id": item.get("whatsapp_id"),
-                "whatsapp_timestamp": item.get("whatsapp_timestamp"),
             }
         )
 
