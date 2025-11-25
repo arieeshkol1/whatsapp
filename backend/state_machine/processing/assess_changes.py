@@ -1,801 +1,419 @@
-"""AssessChanges step - enrich events with persisted user context.
-
-This step is feature-gated ("ASSESS_CHANGES_FEATURE") and, when enabled,
-retrieves additional context for the current phone number from multiple sources:
-
-* The "UserData" table (name provided by the "USER_DATA_TABLE" env var).
-* The main WhatsApp conversation table ("DYNAMODB_TABLE" env var).
-* The WhatsApp rules table ("RULES_TABLE_NAME"/"RULES_TABLE" env vars).
-* A ready-to-send Bedrock request payload for downstream smart-agent orchestration.
-
-The resulting payload is appended to the event so the downstream
-"ProcessText" step can use it without re-querying DynamoDB.
-
-Change log:
-- Support a flexible attributes object in "UserData" instead of a single "Name" field.
-- Make DynamoDB resource region-safe for tests/CI (default: us-east-1).
-- Tolerate bad stored PKs (e.g., trailing newline / missing '+') when reading.
-- Canonicalize returned item to strip whitespace from PhoneNumber.
-"""
-
-from __future__ import annotations
-
 import json
 import os
 from typing import Any, Dict, List, Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key
-from botocore.exceptions import BotoCoreError, ClientError
+from boto3.dynamodb.conditions import Key, Attr
+from botocore.exceptions import ClientError
 
-from common.logger import custom_logger
+# Environment variables
+USER_DATA_TABLE = os.environ.get("USER_DATA_TABLE")
+INTERACTION_TABLE = os.environ.get("INTERACTION_TABLE")
 
-logger = custom_logger()
-_DYNAMODB_SCALAR_KEYS = ("S", "N", "B", "BOOL", "NULL")
-_HISTORY_LIMIT = 50
-_MIN_INTL_DIGITS = int(os.environ.get("MIN_INTL_DIGITS", "11"))
-_DEFAULT_MODEL_ID = os.environ.get("ASSESS_LLM_MODEL_ID", "amazon.nova-lite-v1:0")
-_DEFAULT_MAX_TOKENS = 1024
+dynamodb = boto3.resource("dynamodb")
 
 
-def _parse_float(value: Optional[str], fallback: float) -> float:
-    if value is None:
-        return fallback
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return fallback
-
-
-def _parse_int(value: Optional[str], fallback: int) -> int:
-    if value is None:
-        return fallback
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return fallback
-
-
-def _unwrap_attribute(value: Any) -> Any:
-    """Return the underlying value for DynamoDB attribute maps (recursive)."""
-    if isinstance(value, dict):
-        if "M" in value and isinstance(value["M"], dict):
-            return {k: _unwrap_attribute(v) for k, v in value["M"].items()}
-        if "L" in value and isinstance(value["L"], list):
-            return [_unwrap_attribute(v) for v in value["L"]]
-        for key in _DYNAMODB_SCALAR_KEYS:
-            if key in value:
-                # DynamoDB represents null as {"NULL": True}; normalise to None.
-                if key == "NULL":
-                    return None
-                return value[key]
-        return {k: _unwrap_attribute(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_unwrap_attribute(v) for v in value]
-    return value
-
-
-def _json_safe_value(value: Any) -> Any:
+def _get_param(parameters: List[Dict[str, Any]], name: str) -> Optional[str]:
     """
-    Convert nested structures into JSON-safe primitives, trimming empty strings.
-    Returns None when the value is not serialisable or is effectively empty.
+    Helper to extract a parameter by name from the parameters list.
+
+    Supports:
+      { "name": "phone_number", "value": "+972..." }
+    and defensively:
+      { "name": "phone_number", "value": { "stringValue": "+972..." } }
     """
+    for param in parameters:
+        if param.get("name") != name:
+            continue
 
-    if isinstance(value, str):
-        trimmed = value.strip()
-        return trimmed if trimmed else None
-
-    if isinstance(value, (int, float, bool)):
-        return value
-
-    if isinstance(value, dict):
-        cleaned: Dict[str, Any] = {}
-        for key, val in value.items():
-            coerced = _json_safe_value(val)
-            if coerced is not None:
-                cleaned[key] = coerced
-        return cleaned if cleaned else None
-
-    if isinstance(value, list):
-        cleaned_list = [_json_safe_value(entry) for entry in value]
-        cleaned_list = [entry for entry in cleaned_list if entry is not None]
-        return cleaned_list if cleaned_list else None
+        value = param.get("value")
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict) and "stringValue" in value:
+            return value["stringValue"]
+        if value is not None:
+            return str(value)
 
     return None
 
 
-def _extract_user_name(user_data: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Return a best-effort user name from the flexible attributes map."""
-
-    if not isinstance(user_data, dict):
-        return None
-
-    attributes = user_data.get("Attributes")
-    if isinstance(attributes, dict):
-        parts = []
-        first_name = attributes.get("Name")
-        last_name = attributes.get("FamilyName")
-        for candidate in (first_name, last_name):
-            if isinstance(candidate, str) and candidate.strip():
-                parts.append(candidate.strip())
-        if parts:
-            return " ".join(parts)
-
-    legacy_name = user_data.get("Name")
-    if isinstance(legacy_name, str) and legacy_name.strip():
-        return legacy_name.strip()
-
-    return None
-
-
-def _is_enabled(flag: Optional[str]) -> bool:
-    """Return True when the supplied flag represents an enabled state."""
-    if flag is None:
-        return False
-    normalized = str(flag).strip().lower()
-    return normalized in {"1", "true", "on", "enabled", "yes"}
-
-
-def _normalize_phone(number: Optional[str]) -> Optional[str]:
-    """Normalise a phone number, enforcing an E.164 prefix when possible."""
-    if not number:
-        return None
-
-    trimmed = str(number).strip()
-    if not trimmed:
-        return None
-
-    digits = "".join(ch for ch in trimmed if ch.isdigit())
-    if not digits:
-        return trimmed if trimmed.startswith("+") else None
-
-    if trimmed.startswith("+"):
-        return f"+{digits}"
-
-    if len(digits) >= _MIN_INTL_DIGITS:
-        return f"+{digits}"
-
-    return digits
-
-
-def _normalize_user_type(user_type: Any) -> str:
-    """Return a normalised user type code ("B" for business, otherwise "C")."""
-
-    if isinstance(user_type, str):
-        code = user_type.strip().upper()
-        if code == "B":
-            return "B"
-
-    # Default/fallback: treat as consumer.
-    return "C"
-
-
-def _key_variants(e164: str) -> List[str]:
+def _safe_json(data: Any) -> str:
     """
-    Generate robust variants for lookup to tolerate bad stored keys.
-    Order matters; first successful match wins.
+    JSON-dumps with handling for Decimal and other non-serializable types.
     """
-    variants: List[str] = []
-    base = e164.strip()
-    variants.append(base)
-    # Common bad write: trailing newline
-    variants.append(base + "\n")
-    # If someone stored without '+'
-    if base.startswith("+"):
-        variants.append(base[1:])
-        variants.append(base[1:] + "\n")
-    return variants
-
-
-def _conversation_key_variants(e164: str) -> List[str]:
-    """Return candidate partition keys for the conversation history table."""
-    variants: List[str] = []
-    base = e164.strip()
-    if not base:
-        return variants
-
-    digits_only = "".join(ch for ch in base if ch.isdigit())
-
-    def _append_variant(phone: str) -> None:
-        if phone and phone not in variants:
-            variants.append(phone)
-
-    for candidate in (digits_only, base, base.lstrip("+")):
-        _append_variant(candidate)
-
-    # Legacy prefixed keys kept for backwards compatibility during migration
-    for candidate in list(variants):
-        prefixed = f"NUMBER#{candidate}"
-        if prefixed not in variants:
-            variants.append(prefixed)
-
-    return variants
-
-
-def _rules_partition_key_variants(number: Optional[str]) -> List[str]:
-    """Return candidate PK values for the rules table based on the to-number."""
-    variants: List[str] = []
-    if not number:
-        return variants
-
-    raw = str(number).strip()
-    if not raw:
-        return variants
-
-    def _add(candidate: str) -> None:
-        if candidate and candidate not in variants:
-            variants.append(candidate)
-
-    _add(raw)
-
-    normalized = _normalize_phone(raw)
-    if normalized:
-        _add(normalized)
-        if normalized.startswith("+"):
-            _add(normalized[1:])
-
-    if raw.startswith("+"):
-        _add(raw[1:])
-
-    return variants
-
-
-class AssessChanges:
-    """Enriches the event with user context retrieved from DynamoDB tables."""
-
-    _CONVERSATION_QUERY_LIMIT = _HISTORY_LIMIT
-
-    def __init__(self, event: Optional[Dict[str, Any]] = None) -> None:
-        self.event = event if isinstance(event, dict) else {}
-        self.logger = logger
-        self._endpoint_url = os.environ.get("ENDPOINT_URL")
-        self._user_data_table_name = os.environ.get("USER_DATA_TABLE")
-        self._conversation_table_name = os.environ.get(
-            "DYNAMODB_TABLE"
-        ) or os.environ.get("TABLE_NAME")
-        self._rules_table_name = os.environ.get("RULES_TABLE_NAME") or os.environ.get(
-            "RULES_TABLE"
-        )
-        self._rules_version = os.environ.get("RULESET_VERSION", "CURRENT")
-        self._llm_model_id = os.environ.get("ASSESS_LLM_MODEL_ID", _DEFAULT_MODEL_ID)
-        self._llm_max_tokens = _parse_int(
-            os.environ.get("ASSESS_LLM_MAX_TOKENS"), _DEFAULT_MAX_TOKENS
-        )
-        self._llm_temperature = _parse_float(
-            os.environ.get("ASSESS_LLM_TEMPERATURE"), 0.5
-        )
-        self._llm_top_p = _parse_float(os.environ.get("ASSESS_LLM_TOP_P"), 0.9)
-
-        self._dynamodb_resource = None
-
-    # ------------------------------------------------------------------
-    def assess_and_apply(self) -> Dict[str, Any]:
-        """Fetch user context and append it to the event when the feature is on."""
-        feature_flag = None
-        if isinstance(self.event, dict):
-            features = self.event.get("features")
-            if isinstance(features, dict):
-                feature_flag = features.get("assess_changes")
-        if feature_flag is None:
-            feature_flag = os.environ.get("ASSESS_CHANGES_FEATURE", "off")
-
-        if not _is_enabled(feature_flag):
-            self.logger.debug("AssessChanges disabled; returning event unchanged")
-            return self.event
-
-        phone_number = self._extract_phone_number(self.event)
-        normalized_phone = _normalize_phone(phone_number)
-        if not normalized_phone:
-            self.logger.warning("AssessChanges enabled but phone number missing")
-            return self.event
-
-        user_data_record = self._load_user_data(normalized_phone)
-        conversation_items = self._load_conversation_items(normalized_phone)
-        destination_number = self._extract_to_number(self.event)
-        normalized_destination = _normalize_phone(destination_number)
-        if not normalized_destination and destination_number:
-            normalized_destination = destination_number
-        business_rules = self._load_business_rules(destination_number)
-
-        if (
-            user_data_record is not None
-            or conversation_items
-            or business_rules is not None
-        ):
-            payload = self.event.get("assess_changes")
-            if not isinstance(payload, dict):
-                payload = {}
-                self.event["assess_changes"] = payload
-            if user_data_record is not None:
-                payload["user_data"] = user_data_record
-                # Provide a flat "user_name" for convenience in downstream steps.
-                name_value = _extract_user_name(user_data_record)
-                if name_value:
-                    payload["user_name"] = name_value
-                # Avoid reserved LogRecord keys (e.g., "name")
-                self.logger.debug(
-                    "AssessChanges user_data loaded",
-                    extra={
-                        "ctx_phone": normalized_phone,
-                        "ctx_user_name": name_value,
-                    },
-                )
-            if conversation_items:
-                payload["conversation_items"] = conversation_items
-            if business_rules is not None:
-                payload["business_rules"] = business_rules
-
-            llm_payload = self._build_llm_payload(
-                normalized_phone,
-                normalized_destination,
-                user_data_record,
-                conversation_items,
-                business_rules,
-            )
-            if llm_payload is not None:
-                payload["llm_request"] = llm_payload
-
-        return self.event
-
-    # ------------------------------------------------------------------
-    def _extract_phone_number(self, event: Dict[str, Any]) -> Optional[str]:
-        """Attempt to locate a phone number across different event shapes."""
-        if not isinstance(event, dict):
-            return None
-
-        from_number = event.get("from_number")
-        if isinstance(from_number, str) and from_number.strip():
-            return from_number
-
-        input_event = event.get("input")
-        if isinstance(input_event, dict):
-            candidate = input_event.get("from") or input_event.get("from_number")
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate
-
-            dynamodb_payload = input_event.get("dynamodb")
-            if isinstance(dynamodb_payload, dict):
-                new_image = dynamodb_payload.get("NewImage")
-                if isinstance(new_image, dict):
-                    from_attr = new_image.get("from_number")
-                    if isinstance(from_attr, dict):
-                        if "S" in from_attr and from_attr["S"]:
-                            return from_attr["S"]
-                    elif isinstance(from_attr, str) and from_attr.strip():
-                        return from_attr
-
-        raw_event = event.get("raw_event")
-        if isinstance(raw_event, dict):
-            raw_from = raw_event.get("from") or raw_event.get("from_number")
-            if isinstance(raw_from, str) and raw_from.strip():
-                return raw_from
-
-        return None
-
-    # ------------------------------------------------------------------
-    def _extract_to_number(self, event: Dict[str, Any]) -> Optional[str]:
-        """Locate the destination/"to" number for the current event."""
-        if not isinstance(event, dict):
-            return None
-
-        to_number = event.get("to_number")
-        if isinstance(to_number, str) and to_number.strip():
-            return to_number
-
-        input_event = event.get("input")
-        if isinstance(input_event, dict):
-            candidate = input_event.get("to") or input_event.get("to_number")
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate
-
-            dynamodb_payload = input_event.get("dynamodb")
-            if isinstance(dynamodb_payload, dict):
-                new_image = dynamodb_payload.get("NewImage")
-                if isinstance(new_image, dict):
-                    to_attr = new_image.get("to_number")
-                    if isinstance(to_attr, dict):
-                        value = to_attr.get("S")
-                        if isinstance(value, str) and value.strip():
-                            return value
-                    elif isinstance(to_attr, str) and to_attr.strip():
-                        return to_attr
-
-        raw_event = event.get("raw_event")
-        if isinstance(raw_event, dict):
-            raw_to = raw_event.get("to") or raw_event.get("to_number")
-            if isinstance(raw_to, str) and raw_to.strip():
-                return raw_to
-
-        return None
-
-    # ------------------------------------------------------------------
-    def _extract_message_text(self, event: Dict[str, Any]) -> Optional[str]:
-        if not isinstance(event, dict):
-            return None
-
-        message = event.get("text")
-        if isinstance(message, str) and message.strip():
-            return message
-
-        raw_event = event.get("raw_event")
-        if isinstance(raw_event, dict):
-            body = raw_event.get("message_body") or raw_event.get("text")
-            if isinstance(body, str) and body.strip():
-                return body
-
-        input_event = event.get("input")
-        if isinstance(input_event, dict):
-            body = input_event.get("message_body") or input_event.get("text")
-            if isinstance(body, str) and body.strip():
-                return body
-            dynamodb_payload = input_event.get("dynamodb")
-            if isinstance(dynamodb_payload, dict):
-                new_image = dynamodb_payload.get("NewImage")
-                if isinstance(new_image, dict):
-                    text_attr = new_image.get("text")
-                    if isinstance(text_attr, dict):
-                        content = text_attr.get("S")
-                        if isinstance(content, str) and content.strip():
-                            return content
-                    elif isinstance(text_attr, str) and text_attr.strip():
-                        return text_attr
-
-        return None
-
-    # ------------------------------------------------------------------
-    def _determine_user_type(self, user_data: Optional[Dict[str, Any]]) -> str:
-        if not isinstance(user_data, dict):
-            return "new_customer"
-
-        if _extract_user_name(user_data):
-            return "existing_customer"
-
-        attributes = user_data.get("Attributes")
-        if isinstance(attributes, dict) and attributes:
-            return "existing_customer"
-
-        return "new_customer"
-
-    # ------------------------------------------------------------------
-    def _build_prior_context(
-        self,
-        normalized_phone: str,
-        destination_number: Optional[str],
-        user_data: Optional[Dict[str, Any]],
-        conversation_items: List[Dict[str, Any]],
-        business_rules: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        context: Dict[str, Any] = {
-            "phone_number": normalized_phone,
-        }
-        if destination_number:
-            context["business_number"] = destination_number
-
-        if isinstance(user_data, dict) and user_data:
-            sanitized_user_data = _json_safe_value(user_data)
-            if isinstance(sanitized_user_data, dict) and sanitized_user_data:
-                context["user_data"] = sanitized_user_data
-
-        if conversation_items:
-            recent: List[Dict[str, Any]] = []
-            for item in conversation_items[:5]:
-                if not isinstance(item, dict):
-                    continue
-                recent.append(
-                    {
-                        "from_number": str(item.get("from_number", "")),
-                        "type": str(item.get("type", "")),
-                        "text": str(item.get("text", "")),
-                        "timestamp": str(
-                            item.get("whatsapp_timestamp")
-                            or item.get("created_at")
-                            or ""
-                        ),
-                        "whatsapp_id": str(item.get("whatsapp_id", "")),
-                    }
-                )
-            if recent:
-                context["recent_history"] = recent
-
-        if isinstance(business_rules, dict) and isinstance(
-            business_rules.get("rules_json"), dict
-        ):
-            context["business_rules"] = business_rules["rules_json"]
-
-        return context
-
-    # ------------------------------------------------------------------
-    def _build_system_prompt(
-        self, user_type: str, prior_context: Dict[str, Any]
-    ) -> str:
-        lines = [
-            "You are a smart agent for WhatsApp. Based on the user_type, respond accordingly.",
-            "Extract structured fields and generate a friendly reply. Always return JSON with keys 'response', 'customer_info', and 'interaction_log'.",
-            f"user_type: {user_type}",
-        ]
-
-        if prior_context:
-            serialized_context = json.dumps(
-                prior_context, ensure_ascii=False, separators=(",", ":")
-            )
-            lines.append("Context:")
-            lines.append(serialized_context)
-
-        return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    def _build_llm_payload(
-        self,
-        normalized_phone: str,
-        destination_number: Optional[str],
-        user_data: Optional[Dict[str, Any]],
-        conversation_items: List[Dict[str, Any]],
-        business_rules: Optional[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        user_message = self._extract_message_text(self.event)
-        if not user_message:
-            return None
-
-        user_type = self._determine_user_type(user_data)
-        prior_context = self._build_prior_context(
-            normalized_phone,
-            destination_number,
-            user_data,
-            conversation_items,
-            business_rules,
-        )
-        system_prompt = self._build_system_prompt(user_type, prior_context)
-
-        messages = [
-            {"role": "system", "content": [{"text": system_prompt}]},
-            {"role": "user", "content": [{"text": user_message}]},
-        ]
-
-        inference_config = {
-            "maxTokens": self._llm_max_tokens,
-            "temperature": self._llm_temperature,
-            "topP": self._llm_top_p,
-        }
-
-        return {
-            "model_id": self._llm_model_id,
-            "api": "converse",
-            "messages": messages,
-            "inference_config": inference_config,
-            "user_type": user_type,
-            "prior_context": prior_context,
-        }
-
-    # ------------------------------------------------------------------
-    def _get_dynamodb_resource(self):
-        if self._dynamodb_resource is None:
-            try:
-                # Prefer Lambda/real env; fall back to a default for local tests/moto.
-                region = (
-                    os.environ.get("AWS_REGION")
-                    or os.environ.get("AWS_DEFAULT_REGION")
-                    or "us-east-1"
-                )
-                if self._endpoint_url:
-                    self._dynamodb_resource = boto3.resource(
-                        "dynamodb", endpoint_url=self._endpoint_url, region_name=region
-                    )
-                else:
-                    self._dynamodb_resource = boto3.resource(
-                        "dynamodb", region_name=region
-                    )
-            except Exception:  # pragma: no cover
-                self.logger.exception(
-                    "Failed to initialise DynamoDB resource for AssessChanges"
-                )
-                self._dynamodb_resource = None
-        return self._dynamodb_resource
-
-    # ------------------------------------------------------------------
-    def _load_user_data(self, normalized_phone: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve user data by phone number from the UserData table.
-
-        Since DynamoDB items are schemaless for non-key attributes, a flexible
-        "Attributes" map is returned as part of the full item when present. This
-        method also tolerates bad stored keys (trailing newline / missing '+').
-        """
-        if not self._user_data_table_name:
-            return None
-
-        dynamodb = self._get_dynamodb_resource()
-        if dynamodb is None:
-            return None
-
-        try:
-            table = dynamodb.Table(self._user_data_table_name)
-            # Try a few variants to tolerate bad stored keys (e.g., trailing newline).
-            response = None
-            item = None
-            for candidate in _key_variants(normalized_phone):
-                try:
-                    response = table.get_item(Key={"PhoneNumber": candidate})
-                    item = response.get("Item") if isinstance(response, dict) else None
-                    if isinstance(item, dict):
-                        break
-                except (ClientError, BotoCoreError):
-                    # Will be caught by outer except
-                    raise
-        except (ClientError, BotoCoreError):
-            self.logger.exception(
-                "Failed to read user data",
-                extra={"phone": normalized_phone},
-            )
-            return None
-        except Exception:  # pragma: no cover
-            self.logger.exception(
-                "Unexpected error loading user data",
-                extra={"phone": normalized_phone},
-            )
-            return None
-
-        if not isinstance(item, dict):
-            return None
-
-        # Some environments store the raw DynamoDB attribute map instead of the
-        # document-deserialised form. Detect that scenario and convert it to a
-        # standard Python dictionary so downstream callers don't have to deal
-        # with AttributeValue wrappers (e.g., {"S": "value"}).
-        item = {key: _unwrap_attribute(value) for key, value in item.items()}
-
-        # Canonicalise the returned item: strip whitespace from PK if present.
-        pn = item.get("PhoneNumber")
-        if isinstance(pn, str):
-            item["PhoneNumber"] = pn.strip()
-
-        # --- IMPORTANT CHANGE: derive UserType from existing UserType OR Type ---
-        raw_user_type = item.get("UserType")
-        if raw_user_type is None:
-            # Fallback to legacy/DB "Type" attribute (e.g., "B" / "C")
-            raw_user_type = item.get("Type")
-        item["UserType"] = _normalize_user_type(raw_user_type)
-        # -----------------------------------------------------------------------
-
-        attributes = item.get("Attributes")
-        if isinstance(attributes, dict):
-            cleaned_attributes = _json_safe_value(attributes)
-            if isinstance(cleaned_attributes, dict) and cleaned_attributes:
-                item["Attributes"] = cleaned_attributes
-            else:
-                item.pop("Attributes", None)
-        name_val = item.get("Name")
-        if isinstance(name_val, str) and not name_val.strip():
-            # Normalise empty strings to missing to avoid confusing downstream checks.
-            item.pop("Name", None)
-        return item
-
-    # ------------------------------------------------------------------
-    def _load_conversation_items(self, normalized_phone: str) -> List[Dict[str, Any]]:
-        if not self._conversation_table_name:
-            return []
-
-        dynamodb = self._get_dynamodb_resource()
-        if dynamodb is None:
-            return []
-
-        partition_keys = _conversation_key_variants(normalized_phone)
-        if not partition_keys:
-            return []
-
-        try:
-            table = dynamodb.Table(self._conversation_table_name)
-        except Exception:  # pragma: no cover
-            self.logger.exception(
-                "Unexpected error preparing conversation query",
-                extra={"table": self._conversation_table_name},
-            )
-            return []
-
-        for partition_key in partition_keys:
-            try:
-                response = table.query(
-                    KeyConditionExpression=Key("PK").eq(partition_key),
-                    Limit=self._CONVERSATION_QUERY_LIMIT,
-                )
-            except (ClientError, BotoCoreError):
-                self.logger.exception(
-                    "Failed to query conversation items",
-                    extra={
-                        "table": self._conversation_table_name,
-                        "pk": partition_key,
-                    },
-                )
-                continue
-            except Exception:  # pragma: no cover
-                self.logger.exception(
-                    "Unexpected error querying conversation items",
-                    extra={
-                        "table": self._conversation_table_name,
-                        "pk": partition_key,
-                    },
-                )
-                continue
-
-            items = response.get("Items") if isinstance(response, dict) else None
-            if isinstance(items, list) and items:
-                # Some environments return raw AttributeValue maps. Normalize them so
-                # downstream code always receives simple Python dictionaries.
-                normalized: List[Dict[str, Any]] = []
-                for item in items:
-                    if isinstance(item, dict):
-                        normalized.append(
-                            {
-                                key: _unwrap_attribute(value)
-                                for key, value in item.items()
-                            }
-                        )
-                if normalized:
-                    return normalized
-                return items
-
+    return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def _get_user_data(
+    table_name: Optional[str],
+    phone_number: str,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch user data from USER_DATA_TABLE by phone number.
+
+    IMPORTANT: "PhoneNumber" must match your DynamoDB PK name exactly.
+    """
+    if not table_name:
+        print("USER_DATA_TABLE env var not set")
         return []
 
-    # ------------------------------------------------------------------
-    def _load_business_rules(
-        self, to_number: Optional[str]
-    ) -> Optional[Dict[str, Any]]:
-        if not self._rules_table_name or not to_number:
-            return None
+    table = dynamodb.Table(table_name)
 
-        dynamodb = self._get_dynamodb_resource()
-        if dynamodb is None:
-            return None
+    candidates = [phone_number]
+    trimmed = phone_number.strip()
+    if trimmed and trimmed not in candidates:
+        candidates.append(trimmed)
 
+    for candidate in candidates:
         try:
-            table = dynamodb.Table(self._rules_table_name)
-        except Exception:  # pragma: no cover
-            self.logger.exception(
-                "Unexpected error preparing rules table",
-                extra={"table": self._rules_table_name},
+            response = table.get_item(Key={"PhoneNumber": candidate})
+        except ClientError as e:
+            print(f"DynamoDB get_item failed for {candidate}: {e}")
+            continue
+
+        item = response.get("Item") if isinstance(response, dict) else None
+        if item:
+            return [item]
+
+    return []
+
+
+def _query_user_interactions(
+    table_name: Optional[str],
+    phone_number: str,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Query interactions for a single user (by phone_number without '+').
+
+    Uses a Query on PK, and optionally filters by created_at based on
+    start_date / end_date (strings 'YYYY-MM-DD').
+
+    We do NOT try to be super fancy with SK ranges, we just:
+    - query all by PK
+    - optionally filter on created_at (string compare) in DynamoDB.
+    """
+    if not table_name:
+        print("INTERACTION_TABLE env var not set")
+        return []
+
+    pk = phone_number.lstrip("+")
+    print(
+        f"DEBUG: _query_user_interactions for PK={pk}, "
+        f"start_date={start_date}, end_date={end_date}"
+    )
+
+    table = dynamodb.Table(table_name)
+
+    key_condition = Key("PK").eq(pk)
+    query_kwargs: Dict[str, Any] = {"KeyConditionExpression": key_condition}
+
+    # Build FilterExpression on created_at if date filters are provided
+    filter_expr = None
+    if start_date and end_date:
+        # Include everything from start_date to end_date (inclusive).
+        # created_at is ISO like "2025-11-20T17:10:59.585566+00:00",
+        # so comparing with "2025-11-20" and "2025-11-21" works lexicographically.
+        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
+    elif start_date:
+        filter_expr = Attr("created_at").gte(start_date)
+    elif end_date:
+        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
+
+    if filter_expr is not None:
+        query_kwargs["FilterExpression"] = filter_expr
+
+    items: List[Dict[str, Any]] = []
+
+    try:
+        response = table.query(Limit=50, **query_kwargs)
+        print(f"DEBUG: first page item count={len(response.get('Items', []))}")
+        items.extend(response.get("Items", []))
+
+        while response.get("LastEvaluatedKey"):
+            response = table.query(
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+                Limit=50,
+                **query_kwargs,
             )
-            return None
+            print(f"DEBUG: next page item count={len(response.get('Items', []))}")
+            items.extend(response.get("Items", []))
+    except ClientError as e:
+        print(f"DynamoDB query failed in _query_user_interactions: {e}")
+        return []
 
-        key_variants = _rules_partition_key_variants(to_number)
-        if not key_variants:
-            return None
+    return items
 
-        item: Optional[Dict[str, Any]] = None
-        for candidate in key_variants:
-            try:
-                response = table.get_item(
-                    Key={"PK": candidate, "SK": self._rules_version}
+
+def _scan_interactions_global(
+    table_name: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Scan interactions across ALL users, optionally filtered by date range.
+
+    Uses Scan with FilterExpression on created_at.
+    """
+    if not table_name:
+        print("INTERACTION_TABLE env var not set")
+        return []
+
+    print(
+        f"DEBUG: _scan_interactions_global start_date={start_date}, "
+        f"end_date={end_date}"
+    )
+
+    table = dynamodb.Table(table_name)
+
+    filter_expr = None
+    if start_date and end_date:
+        filter_expr = Attr("created_at").between(start_date, end_date + "T99:99:99")
+    elif start_date:
+        filter_expr = Attr("created_at").gte(start_date)
+    elif end_date:
+        filter_expr = Attr("created_at").lte(end_date + "T99:99:99")
+
+    scan_kwargs: Dict[str, Any] = {}
+    if filter_expr is not None:
+        scan_kwargs["FilterExpression"] = filter_expr
+
+    items: List[Dict[str, Any]] = []
+
+    try:
+        response = table.scan(Limit=50, **scan_kwargs)
+        print(f"DEBUG: first scan page item count={len(response.get('Items', []))}")
+        items.extend(response.get("Items", []))
+
+        while response.get("LastEvaluatedKey"):
+            response = table.scan(
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+                Limit=50,
+                **scan_kwargs,
+            )
+            print(f"DEBUG: next scan page item count={len(response.get('Items', []))}")
+            items.extend(response.get("Items", []))
+    except ClientError as e:
+        print(f"DynamoDB scan failed in _scan_interactions_global: {e}")
+        return []
+
+    return items
+
+
+def _stringify_items(items: List[Dict[str, Any]]) -> List[str]:
+    """
+    Turn a list of dict items into a list of JSON strings.
+    Handles Decimal via default=str.
+    """
+    results: List[str] = []
+    for item in items:
+        results.append(_safe_json(item))
+    return results
+
+
+# --------- ACTION IMPLEMENTATIONS --------- #
+
+
+def action_group_query_user_data(parameters: List[Dict[str, Any]]) -> List[str]:
+    """
+    Read user data by phone_number.
+    """
+    phone_number = _get_param(parameters, "phone_number")
+    if not phone_number:
+        return ["phone_number is required for QueryUserData"]
+
+    if not USER_DATA_TABLE:
+        return ["USER_DATA_TABLE environment variable is not set"]
+
+    items = _get_user_data(USER_DATA_TABLE, phone_number)
+    if not items:
+        return [
+            _safe_json(
+                {
+                    "user": None,
+                    "phone_number": phone_number,
+                    "message": "No matching user data found",
+                }
+            )
+        ]
+
+    user = items[0]
+    return [_safe_json({"user": user})]
+
+
+def action_group_update_user_name(parameters: List[Dict[str, Any]]) -> List[str]:
+    """
+    Update the Name field for a user identified by phone_number.
+    """
+    phone_number = _get_param(parameters, "phone_number")
+    new_name = _get_param(parameters, "name")
+
+    if not phone_number:
+        return ["phone_number is required for UpdateUserName"]
+    if not new_name:
+        return ["name is required for UpdateUserName"]
+
+    if not USER_DATA_TABLE:
+        return ["USER_DATA_TABLE environment variable is not set"]
+
+    table = dynamodb.Table(USER_DATA_TABLE)
+
+    try:
+        response = table.update_item(
+            Key={"PhoneNumber": phone_number},
+            UpdateExpression="SET #N = :name",
+            ExpressionAttributeNames={"#N": "Name"},
+            ExpressionAttributeValues={":name": new_name},
+            ReturnValues="ALL_NEW",
+        )
+        updated = response.get("Attributes")
+        if not updated:
+            return [
+                _safe_json(
+                    {
+                        "user": None,
+                        "phone_number": phone_number,
+                        "message": "User not found to update",
+                    }
                 )
-            except (ClientError, BotoCoreError):
-                self.logger.exception(
-                    "Failed to load business rules",
-                    extra={"table": self._rules_table_name, "pk": candidate},
-                )
-                continue
-            except Exception:  # pragma: no cover
-                self.logger.exception(
-                    "Unexpected error loading business rules",
-                    extra={"table": self._rules_table_name, "pk": candidate},
-                )
-                continue
+            ]
 
-            data = response.get("Item") if isinstance(response, dict) else None
-            if isinstance(data, dict):
-                item = data
-                break
+        return [
+            _safe_json(
+                {
+                    "user": updated,
+                    "message": "Name updated successfully",
+                }
+            )
+        ]
+    except ClientError as e:
+        print(f"DynamoDB update_item failed: {e}")
+        return [
+            _safe_json(
+                {
+                    "error": "Failed to update user name",
+                    "details": str(e),
+                    "phone_number": phone_number,
+                }
+            )
+        ]
 
-        if not isinstance(item, dict):
-            return None
 
-        item = {key: _unwrap_attribute(value) for key, value in item.items()}
+def action_group_query_interaction_history(
+    parameters: List[Dict[str, Any]],
+) -> List[str]:
+    """
+    Unified QueryInteractionHistory:
 
-        rules_blob = item.get("rules_json")
-        if isinstance(rules_blob, str):
-            try:
-                item["rules_json"] = json.loads(rules_blob)
-            except json.JSONDecodeError:
-                self.logger.warning(
-                    "Failed to decode rules_json for business rules",
-                    extra={"pk": item.get("PK")},
-                )
+    Parameters:
+    - phone_number (string, optional):
+        If provided -> limit results to this user.
+        If omitted -> search across all users.
+    - start_date (string, optional): YYYY-MM-DD
+    - end_date (string, optional): YYYY-MM-DD
 
-        return item
+    Returns:
+    - JSON string with:
+      { "interactions": [...], "phone_number": ..., "start_date": ..., "end_date": ... }
+    """
+    phone_number = _get_param(parameters, "phone_number")
+    start_date = _get_param(parameters, "start_date")
+    end_date = _get_param(parameters, "end_date")
+
+    if not INTERACTION_TABLE:
+        return ["INTERACTION_TABLE environment variable is not set"]
+
+    # Decide whether to query per-user or scan globally
+    if phone_number:
+        items = _query_user_interactions(
+            INTERACTION_TABLE, phone_number, start_date, end_date
+        )
+    else:
+        items = _scan_interactions_global(INTERACTION_TABLE, start_date, end_date)
+
+    if not items:
+        return [
+            _safe_json(
+                {
+                    "interactions": [],
+                    "message": "No matching interaction history found",
+                    "phone_number": phone_number,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                }
+            )
+        ]
+
+    return [
+        _safe_json(
+            {
+                "interactions": items,
+                "phone_number": phone_number,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+        )
+    ]
+
+
+# --------- MAIN LAMBDA HANDLER --------- #
+
+
+def lambda_handler(event, context):
+    """
+    Main handler for Bedrock Agents action group.
+
+    Response schema:
+
+    {
+      "messageVersion": "1.0",
+      "response": {
+        "actionGroup": "<ActionGroupName>",
+        "function": "<FunctionName>",
+        "functionResponse": {
+          "responseBody": {
+            "TEXT": {
+              "body": "<string>"
+            }
+          }
+        }
+      }
+    }
+    """
+    print("Received event:", _safe_json(event))
+
+    action_group = event.get("actionGroup")
+    function_name = event.get("function")
+    parameters = event.get("parameters", []) or []
+
+    # Route based on function name first
+    if function_name == "QueryUserData":
+        results = action_group_query_user_data(parameters)
+    elif function_name == "UpdateUserName":
+        results = action_group_update_user_name(parameters)
+    elif function_name == "QueryInteractionHistory":
+        results = action_group_query_interaction_history(parameters)
+    else:
+        # Fallback by actionGroup if function is missing/blank
+        if action_group == "QueryUserData":
+            results = action_group_query_user_data(parameters)
+        elif action_group == "QueryInteractionHistory":
+            results = action_group_query_interaction_history(parameters)
+        else:
+            results = [
+                f"Action Group or function <{action_group}:{function_name}> not supported."
+            ]
+
+    body_text = "\n".join(results)
+    message_version = event.get("messageVersion") or "1.0"
+
+    response_body = {"TEXT": {"body": body_text}}
+
+    action_response = {
+        "actionGroup": action_group,
+        "function": function_name,
+        "functionResponse": {"responseBody": response_body},
+    }
+
+    return {"messageVersion": message_version, "response": action_response}
