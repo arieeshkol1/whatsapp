@@ -621,6 +621,25 @@ def _parse_bedrock_json(raw: Optional[Any]) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _extract_answer_text(raw: Optional[str]) -> Optional[str]:
+    """Return the text wrapped in <answer>...</answer> tags when present."""
+
+    if not raw or not isinstance(raw, str):
+        return None
+
+    start_tag = "<answer>"
+    end_tag = "</answer>"
+
+    start_idx = raw.find(start_tag)
+    end_idx = raw.find(end_tag, start_idx + len(start_tag)) if start_idx != -1 else -1
+
+    if start_idx == -1 or end_idx == -1:
+        return None
+
+    inner = raw[start_idx + len(start_tag) : end_idx]
+    return inner.strip() or None
+
+
 def _extract_business_id_candidate_from_text(text: Optional[str]) -> Optional[str]:
     """
     Extract a phone-like business_id from the current message text.
@@ -1021,9 +1040,9 @@ class ProcessText(BaseStepFunction):
 
         consumer_metadata_line = " ".join(consumer_metadata_tokens)
         consumer_input_text = (
-            f"{consumer_metadata_line}\n{consumer_context_block}"
+            f"{consumer_metadata_line} {self.text}"
             if consumer_metadata_line
-            else consumer_context_block
+            else str(self.text)
         )
 
         session_identifier = _build_session_id(
@@ -1248,6 +1267,9 @@ class ProcessText(BaseStepFunction):
                     "Bedrock/Agent response was not valid JSON after parsing",
                     extra={"session_id": session_identifier},
                 )
+                answer_only = _extract_answer_text(raw_response)
+                if answer_only:
+                    reply_text = answer_only
                 bedrock_response_json = {"raw_response": raw_response}
             else:
                 bedrock_response_json = parsed
