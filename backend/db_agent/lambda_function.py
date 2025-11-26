@@ -185,7 +185,6 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
                 "to_number": item.get("to_number") or item.get("PK"),
                 "user_message": item.get("user_message") or item.get("text"),
                 "system_response": item.get("system_response"),
-                "raw_response": item.get("raw_response"),
                 "type": item.get("type"),
             }
         )
