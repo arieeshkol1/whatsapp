@@ -177,8 +177,21 @@ def call_bedrock_agent(
     region = region or os.environ.get("AWS_REGION", "us-east-1")
 
     # Prefer function args, fall back to env
-    agent_id = agent_id or os.environ.get("AGENT_ID")
-    agent_alias_id = agent_alias_id or os.environ.get("AGENT_ALIAS_ID")
+    consumer_agent_id = os.environ.get("CONSUMER_AGENT_ID")
+    consumer_agent_alias_id = os.environ.get("CONSUMER_AGENT_ALIAS_ID")
+
+    agent_id = (
+        agent_id
+        or consumer_agent_id
+        or os.environ.get("BEDROCK_AGENT_ID")
+        or os.environ.get("AGENT_ID")
+    )
+    agent_alias_id = (
+        agent_alias_id
+        or consumer_agent_alias_id
+        or os.environ.get("BEDROCK_AGENT_ALIAS_ID")
+        or os.environ.get("AGENT_ALIAS_ID")
+    )
 
     if not agent_id or not agent_alias_id:
         cached_agent_id, cached_alias_id = _agent_parameters_from_ssm(region)

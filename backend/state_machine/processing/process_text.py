@@ -127,6 +127,27 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     return stripped
 
 
+def _normalize_business_id(number: Optional[str]) -> Optional[str]:
+    """
+    Normalize the business identifier for Bedrock agents.
+
+    The Consumer Agent expects a digits-only string with no leading '+'.
+    """
+
+    if not number:
+        return None
+
+    stripped = str(number).strip()
+    if not stripped:
+        return None
+
+    digits_only = "".join(ch for ch in stripped if ch.isdigit())
+    if digits_only:
+        return digits_only
+
+    return stripped.lstrip("+") or None
+
+
 def _history_partition_keys(from_number: Optional[str]) -> List[str]:
     """Return candidate partition keys for legacy interaction history lookups.
 
@@ -743,8 +764,18 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
     - This helper is ONLY for user_type == "B".
     """
     # Correct default Agent ID for the Business Agent
-    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6KNOO")
-    agent_alias_id = os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID", "TSTALIASID")
+    agent_id = (
+        os.environ.get("BUSINESS_AGENT_ID")
+        or os.environ.get("BUSINESS_OWNER_AGENT_ID")
+        or os.environ.get("AGENT_ID")
+        or "JINCH6KNOO"
+    )
+    agent_alias_id = (
+        os.environ.get("BUSINESS_AGENT_ALIAS_ID")
+        or os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID")
+        or os.environ.get("AGENT_ALIAS_ID")
+        or "TSTALIASID"
+    )
 
     client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
 
@@ -973,7 +1004,27 @@ class ProcessText(BaseStepFunction):
             context_sections.append(user_profile_context)
 
         context_sections.append(f"הודעת הלקוח כעת:\n{self.text}")
-        consumer_input_text = "\n\n".join(context_sections)
+
+        consumer_context_block = "\n\n".join(context_sections)
+
+        consumer_metadata_tokens: List[str] = []
+        if from_number:
+            consumer_metadata_tokens.append(f"[phone_number={from_number}]")
+        consumer_metadata_tokens.append("[user_type=C]")
+        if to_number:
+            consumer_metadata_tokens.append(f"[to_number={to_number}]")
+            normalized_business_id = _normalize_business_id(to_number)
+            if normalized_business_id:
+                consumer_metadata_tokens.append(
+                    f"[business_id={normalized_business_id}]"
+                )
+
+        consumer_metadata_line = " ".join(consumer_metadata_tokens)
+        consumer_input_text = (
+            f"{consumer_metadata_line}\n{consumer_context_block}"
+            if consumer_metadata_line
+            else consumer_context_block
+        )
 
         session_identifier = _build_session_id(
             from_number=from_number,
@@ -1064,17 +1115,17 @@ class ProcessText(BaseStepFunction):
             # 1) Prefer BusinessId stored on user_data (once Agent sets it)
             candidate = assess_user_data.get("BusinessId")
             if candidate:
-                business_id = str(candidate).strip()
+                business_id = _normalize_business_id(candidate)
 
             # 2) If not present, try deriving from the current text (e.g. "972502649476")
             if not business_id:
                 text_candidate = _extract_business_id_candidate_from_text(self.text)
                 if text_candidate:
-                    business_id = text_candidate
+                    business_id = _normalize_business_id(text_candidate)
 
             # 3) If still missing, fall back to the WhatsApp "to" number
             if not business_id and to_number:
-                business_id = str(to_number).strip()
+                business_id = _normalize_business_id(to_number)
 
             if business_id:
                 # Build compact metadata line to help the Business Agent tools.
@@ -1141,10 +1192,24 @@ class ProcessText(BaseStepFunction):
                     "from_number": from_number,
                 },
             )
+
+            consumer_agent_id = (
+                os.environ.get("CONSUMER_AGENT_ID")
+                or os.environ.get("BEDROCK_AGENT_ID")
+                or os.environ.get("AGENT_ID")
+            )
+            consumer_agent_alias_id = (
+                os.environ.get("CONSUMER_AGENT_ALIAS_ID")
+                or os.environ.get("BEDROCK_AGENT_ALIAS_ID")
+                or os.environ.get("AGENT_ALIAS_ID")
+            )
+
             try:
                 raw_response = call_bedrock_agent(
                     session_id=session_identifier,
                     input_text=consumer_input_text,
+                    agent_id=consumer_agent_id,
+                    agent_alias_id=consumer_agent_alias_id,
                 )
             except Exception as exc:
                 # IMPORTANT:
