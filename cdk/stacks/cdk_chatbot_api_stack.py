@@ -501,6 +501,16 @@ class ChatbotAPIStack(Stack):
             "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
             "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
             "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
+            "BUSINESS_AGENT_ID": self.app_config.get("business_agent_id"),
+            "BUSINESS_AGENT_ALIAS_ID": self.app_config.get("business_agent_alias_id"),
+            "CONSUMER_AGENT_ID": (
+                self.app_config.get("consumer_agent_id")
+                or self.app_config.get("bedrock_agent_id")
+            ),
+            "CONSUMER_AGENT_ALIAS_ID": (
+                self.app_config.get("consumer_agent_alias_id")
+                or self.app_config.get("bedrock_agent_alias_id")
+            ),
             "DB_AGENT_ID": self.app_config.get("db_agent_id"),
             "DB_AGENT_ALIAS_ID": self.app_config.get("db_agent_alias_id"),
             "USER_DATA_TABLE": (

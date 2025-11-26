@@ -127,6 +127,27 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     return stripped
 
 
+def _normalize_business_id(number: Optional[str]) -> Optional[str]:
+    """
+    Normalize the business identifier for Bedrock agents.
+
+    The Consumer Agent expects a digits-only string with no leading '+'.
+    """
+
+    if not number:
+        return None
+
+    stripped = str(number).strip()
+    if not stripped:
+        return None
+
+    digits_only = "".join(ch for ch in stripped if ch.isdigit())
+    if digits_only:
+        return digits_only
+
+    return stripped.lstrip("+") or None
+
+
 def _history_partition_keys(from_number: Optional[str]) -> List[str]:
     """Return candidate partition keys for legacy interaction history lookups.
 
@@ -600,6 +621,25 @@ def _parse_bedrock_json(raw: Optional[Any]) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _extract_answer_text(raw: Optional[str]) -> Optional[str]:
+    """Return the text wrapped in <answer>...</answer> tags when present."""
+
+    if not raw or not isinstance(raw, str):
+        return None
+
+    start_tag = "<answer>"
+    end_tag = "</answer>"
+
+    start_idx = raw.find(start_tag)
+    end_idx = raw.find(end_tag, start_idx + len(start_tag)) if start_idx != -1 else -1
+
+    if start_idx == -1 or end_idx == -1:
+        return None
+
+    inner = raw[start_idx + len(start_tag) : end_idx]
+    return inner.strip() or None
+
+
 def _extract_business_id_candidate_from_text(text: Optional[str]) -> Optional[str]:
     """
     Extract a phone-like business_id from the current message text.
@@ -743,8 +783,18 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
     - This helper is ONLY for user_type == "B".
     """
     # Correct default Agent ID for the Business Agent
-    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6KNOO")
-    agent_alias_id = os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID", "TSTALIASID")
+    agent_id = (
+        os.environ.get("BUSINESS_AGENT_ID")
+        or os.environ.get("BUSINESS_OWNER_AGENT_ID")
+        or os.environ.get("AGENT_ID")
+        or "JINCH6KNOO"
+    )
+    agent_alias_id = (
+        os.environ.get("BUSINESS_AGENT_ALIAS_ID")
+        or os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID")
+        or os.environ.get("AGENT_ALIAS_ID")
+        or "TSTALIASID"
+    )
 
     client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
 
@@ -973,7 +1023,27 @@ class ProcessText(BaseStepFunction):
             context_sections.append(user_profile_context)
 
         context_sections.append(f"הודעת הלקוח כעת:\n{self.text}")
-        consumer_input_text = "\n\n".join(context_sections)
+
+        consumer_context_block = "\n\n".join(context_sections)
+
+        consumer_metadata_tokens: List[str] = []
+        if from_number:
+            consumer_metadata_tokens.append(f"[phone_number={from_number}]")
+        consumer_metadata_tokens.append("[user_type=C]")
+        if to_number:
+            consumer_metadata_tokens.append(f"[to_number={to_number}]")
+            normalized_business_id = _normalize_business_id(to_number)
+            if normalized_business_id:
+                consumer_metadata_tokens.append(
+                    f"[business_id={normalized_business_id}]"
+                )
+
+        consumer_metadata_line = " ".join(consumer_metadata_tokens)
+        consumer_input_text = (
+            f"{consumer_metadata_line} {self.text}"
+            if consumer_metadata_line
+            else str(self.text)
+        )
 
         session_identifier = _build_session_id(
             from_number=from_number,
@@ -1064,17 +1134,17 @@ class ProcessText(BaseStepFunction):
             # 1) Prefer BusinessId stored on user_data (once Agent sets it)
             candidate = assess_user_data.get("BusinessId")
             if candidate:
-                business_id = str(candidate).strip()
+                business_id = _normalize_business_id(candidate)
 
             # 2) If not present, try deriving from the current text (e.g. "972502649476")
             if not business_id:
                 text_candidate = _extract_business_id_candidate_from_text(self.text)
                 if text_candidate:
-                    business_id = text_candidate
+                    business_id = _normalize_business_id(text_candidate)
 
             # 3) If still missing, fall back to the WhatsApp "to" number
             if not business_id and to_number:
-                business_id = str(to_number).strip()
+                business_id = _normalize_business_id(to_number)
 
             if business_id:
                 # Build compact metadata line to help the Business Agent tools.
@@ -1141,10 +1211,24 @@ class ProcessText(BaseStepFunction):
                     "from_number": from_number,
                 },
             )
+
+            consumer_agent_id = (
+                os.environ.get("CONSUMER_AGENT_ID")
+                or os.environ.get("BEDROCK_AGENT_ID")
+                or os.environ.get("AGENT_ID")
+            )
+            consumer_agent_alias_id = (
+                os.environ.get("CONSUMER_AGENT_ALIAS_ID")
+                or os.environ.get("BEDROCK_AGENT_ALIAS_ID")
+                or os.environ.get("AGENT_ALIAS_ID")
+            )
+
             try:
                 raw_response = call_bedrock_agent(
                     session_id=session_identifier,
                     input_text=consumer_input_text,
+                    agent_id=consumer_agent_id,
+                    agent_alias_id=consumer_agent_alias_id,
                 )
             except Exception as exc:
                 # IMPORTANT:
@@ -1183,6 +1267,9 @@ class ProcessText(BaseStepFunction):
                     "Bedrock/Agent response was not valid JSON after parsing",
                     extra={"session_id": session_identifier},
                 )
+                answer_only = _extract_answer_text(raw_response)
+                if answer_only:
+                    reply_text = answer_only
                 bedrock_response_json = {"raw_response": raw_response}
             else:
                 bedrock_response_json = parsed
