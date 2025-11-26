@@ -1283,16 +1283,10 @@ class ProcessText(BaseStepFunction):
         self.logger.info(f"Generated response message: {self.response_message}")
         self.logger.info("Validation finished successfully")
 
-        final_response = self.response_message
-        for section in [customer_summary, final_order_progress_summary]:
-            if section:
-                if section not in final_response:
-                    final_response = f"{final_response}\n\n{section}"
-
         # ------------------------------------------------------------------
         # Structured output for downstream steps
         # ------------------------------------------------------------------
-        self.event["response_message"] = final_response
+        self.event["response_message"] = self.response_message
         if customer_summary:
             self.event["customer_summary"] = customer_summary
         if final_order_progress_summary:
