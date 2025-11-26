@@ -43,6 +43,10 @@ HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE
 HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
+# Interaction history table
+HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE")
+HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
+history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
 # -------------------- HELPERS -------------------- #
 
@@ -82,6 +86,40 @@ def build_success_response(action_group, function, message_version, payload):
         "messageVersion": message_version,
     }
 
+def build_success_response(action_group, function, message_version, payload):
+    """
+    Response format expected by Bedrock Agents:
+    {
+      "response": {
+        "actionGroup": "...",
+        "function": "...",
+        "functionResponse": {
+          "responseBody": {
+            "TEXT": { "body": "<json string>" }
+          }
+        }
+      },
+      "messageVersion": "1.0"
+    }
+    """
+    return {
+        "response": {
+            "actionGroup": action_group,
+            "function": function,
+            "functionResponse": {
+                "responseBody": {
+                    "TEXT": {
+                        "body": json.dumps(
+                            payload,
+                            ensure_ascii=False,
+                            default=_json_default,
+                        )
+                    }
+                }
+            },
+        },
+        "messageVersion": message_version,
+    }
 
 def build_error_response(
     action_group, function, message_version, message, code="ERROR"
@@ -111,6 +149,7 @@ def get_business_rules(business_id: str) -> dict:
         "version": item.get("version", "v1"),
         "rules": rules,
     }
+    return build_success_response(action_group, function, message_version, payload)
 
 
 def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
