@@ -12,6 +12,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logger = logging.getLogger()
 logger.setLevel(LOG_LEVEL)
 
+
 # -------------------- JSON / DECIMAL HELPERS -------------------- #
 
 
@@ -26,6 +27,7 @@ def _json_default(o):
 
 
 dynamodb = boto3.resource("dynamodb")
+
 
 # -------------------- TABLES -------------------- #
 
@@ -43,7 +45,9 @@ HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE
 HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
+
 # -------------------- HELPERS -------------------- #
+
 
 def build_success_response(action_group, function, message_version, payload):
     """
@@ -80,6 +84,7 @@ def build_success_response(action_group, function, message_version, payload):
         "messageVersion": message_version,
     }
 
+
 def build_error_response(
     action_group, function, message_version, message, code="ERROR"
 ):
@@ -90,7 +95,9 @@ def build_error_response(
     }
     return build_success_response(action_group, function, message_version, payload)
 
+
 # -------------------- BUSINESS RULES -------------------- #
+
 
 def get_business_rules(business_id: str) -> dict:
     resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
@@ -106,6 +113,7 @@ def get_business_rules(business_id: str) -> dict:
         "version": item.get("version", "v1"),
         "rules": rules,
     }
+
 
 def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
     now = datetime.now(timezone.utc).isoformat()
@@ -124,7 +132,9 @@ def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
         "updated_at": now,
     }
 
+
 # -------------------- USER DATA -------------------- #
+
 
 def update_user_business_id(phone_number: str, business_id: str) -> dict:
     """
@@ -145,7 +155,9 @@ def update_user_business_id(phone_number: str, business_id: str) -> dict:
         "updated_at": now,
     }
 
+
 # -------------------- INTERACTION HISTORY -------------------- #
+
 
 def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
     """
@@ -213,7 +225,9 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
         "interactions": interactions,
     }
 
+
 # -------------------- LAMBDA HANDLER -------------------- #
+
 
 def lambda_handler(event, context):
     try:
@@ -240,7 +254,10 @@ def lambda_handler(event, context):
             try:
                 result = get_business_rules(business_id)
                 return build_success_response(
-                    action_group, function, message_version, result
+                    action_group,
+                    function,
+                    message_version,
+                    result,
                 )
             except KeyError as e:
                 return build_error_response(
@@ -252,7 +269,7 @@ def lambda_handler(event, context):
                 )
 
         # ---- UpsertBusinessRules ----
-        elif function == "UpsertBusinessRules":
+        if function == "UpsertBusinessRules":
             business_id = params.get("business_id")
             rules_raw = params.get("rules")
             version = params.get("version", "v1")
@@ -291,11 +308,14 @@ def lambda_handler(event, context):
 
             result = upsert_business_rules(business_id, version, rules)
             return build_success_response(
-                action_group, function, message_version, result
+                action_group,
+                function,
+                message_version,
+                result,
             )
 
         # ---- UpdateUserBusinessId ----
-        elif function == "UpdateUserBusinessId":
+        if function == "UpdateUserBusinessId":
             phone = params.get("phone_number")
             business_id = params.get("business_id")
 
@@ -319,11 +339,14 @@ def lambda_handler(event, context):
 
             result = update_user_business_id(phone, business_id)
             return build_success_response(
-                action_group, function, message_version, result
+                action_group,
+                function,
+                message_version,
+                result,
             )
 
         # ---- QueryInteractionHistory ----
-        elif function == "QueryInteractionHistory":
+        if function == "QueryInteractionHistory":
             partition_key = params.get("partition_key")
             sort_key_prefix = params.get("sort_key_prefix")
 
@@ -347,18 +370,20 @@ def lambda_handler(event, context):
 
             result = query_interaction_history(partition_key, sort_key_prefix)
             return build_success_response(
-                action_group, function, message_version, result
-            )
-
-        # ---- Unsupported function ----
-        else:
-            return build_error_response(
                 action_group,
                 function,
                 message_version,
-                f"Unsupported function: {function}",
-                code="UNSUPPORTED_FUNCTION",
+                result,
             )
+
+        # ---- Unsupported function ----
+        return build_error_response(
+            action_group,
+            function,
+            message_version,
+            f"Unsupported function: {function}",
+            code="UNSUPPORTED_FUNCTION",
+        )
 
     except Exception:
         logger.exception("Unexpected error")
