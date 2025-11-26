@@ -1015,6 +1015,8 @@ class ProcessText(BaseStepFunction):
             assess_user_data = {}
 
         assess_user_type = None
+        # assess_changes emits the canonical UserType field; the legacy "Type"
+        # value is deprecated and not used for routing decisions.
         assess_user_type_raw = assess_user_data.get("UserType")
         if assess_user_type_raw is None:
             assess_user_type_raw = assess_user_data.get("Type")
