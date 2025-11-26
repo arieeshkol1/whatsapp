@@ -31,6 +31,33 @@ HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE
 HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
+def build_error_response(
+    action_group, function, message_version, message, code="ERROR"
+):
+    payload = {
+        "status": "error",
+        "error_code": code,
+        "message": message,
+    }
+    return build_success_response(action_group, function, message_version, payload)
+
+
+# -------------------- BUSINESS RULES -------------------- #
+
+def get_business_rules(business_id: str) -> dict:
+    resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
+    item = resp.get("Item")
+    if not item:
+        raise KeyError(f"No rules found for business_id={business_id}")
+    rules_json = item.get("rules_json")
+    if not rules_json:
+        raise KeyError(f"rules_json missing for business_id={business_id}")
+    rules = json.loads(rules_json)
+    return {
+        "business_id": business_id,
+        "version": item.get("version", "v1"),
+        "rules": rules,
+    }
 
 # -------------------- JSON / DECIMAL HELPERS -------------------- #
 
