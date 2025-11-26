@@ -13,6 +13,23 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logger = logging.getLogger()
 logger.setLevel(LOG_LEVEL)
 
+# -------------------- JSON / DECIMAL HELPERS -------------------- #
+
+# -------------------- TABLES -------------------- #
+
+def _json_default(o):
+    """
+    Used by json.dumps to serialize DynamoDB Decimal values.
+    """
+    if isinstance(o, Decimal):
+        # If it's an integer-like decimal, cast to int, else float
+        return int(o) if o % 1 == 0 else float(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+# UserData table
+USERDATA_TABLE_NAME = os.getenv("USER_DATA_TABLE", "UserData")
+USERDATA_TABLE = dynamodb.Table(USERDATA_TABLE_NAME)
+
 dynamodb = boto3.resource("dynamodb")
 
 # -------------------- TABLES -------------------- #
@@ -30,46 +47,6 @@ USERDATA_TABLE = dynamodb.Table(USERDATA_TABLE_NAME)
 HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE")
 HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
-
-def build_error_response(
-    action_group, function, message_version, message, code="ERROR"
-):
-    payload = {
-        "status": "error",
-        "error_code": code,
-        "message": message,
-    }
-    return build_success_response(action_group, function, message_version, payload)
-
-
-# -------------------- BUSINESS RULES -------------------- #
-
-def get_business_rules(business_id: str) -> dict:
-    resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
-    item = resp.get("Item")
-    if not item:
-        raise KeyError(f"No rules found for business_id={business_id}")
-    rules_json = item.get("rules_json")
-    if not rules_json:
-        raise KeyError(f"rules_json missing for business_id={business_id}")
-    rules = json.loads(rules_json)
-    return {
-        "business_id": business_id,
-        "version": item.get("version", "v1"),
-        "rules": rules,
-    }
-
-# -------------------- JSON / DECIMAL HELPERS -------------------- #
-
-
-def _json_default(o):
-    """
-    Used by json.dumps to serialize DynamoDB Decimal values.
-    """
-    if isinstance(o, Decimal):
-        # If it's an integer-like decimal, cast to int, else float
-        return int(o) if o % 1 == 0 else float(o)
-    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
 
 # -------------------- HELPERS -------------------- #
