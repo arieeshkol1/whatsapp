@@ -170,6 +170,28 @@ def _normalize_user_type(user_type: Any) -> str:
     return "C"
 
 
+def _canonicalize_user_type(item: Dict[str, Any]) -> None:
+    """
+    Normalise the user type, ensuring the canonical ``UserType`` field is set.
+
+    ``Type`` is deprecated but still populated for backwards compatibility so
+    older consumers do not break while newer paths rely on ``UserType``.
+    """
+
+    if not isinstance(item, dict):
+        return
+
+    raw_user_type = item.get("UserType")
+    if raw_user_type is None:
+        raw_user_type = item.get("Type")
+
+    normalized = _normalize_user_type(raw_user_type)
+
+    item["UserType"] = normalized
+    # Keep the legacy field aligned to avoid surprising downstream consumers.
+    item["Type"] = normalized
+
+
 def _key_variants(e164: str) -> List[str]:
     """
     Generate robust variants for lookup to tolerate bad stored keys.
@@ -648,11 +670,7 @@ class AssessChanges:
         if isinstance(pn, str):
             item["PhoneNumber"] = pn.strip()
 
-        raw_user_type = item.get("UserType")
-        if raw_user_type is None:
-            # Fallback to legacy/DB "Type" attribute (e.g., "B" / "C")
-            raw_user_type = item.get("Type")
-        item["UserType"] = _normalize_user_type(raw_user_type)
+        _canonicalize_user_type(item)
         attributes = item.get("Attributes")
         if isinstance(attributes, dict):
             cleaned_attributes = _json_safe_value(attributes)

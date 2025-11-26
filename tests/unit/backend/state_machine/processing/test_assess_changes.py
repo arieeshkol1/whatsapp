@@ -47,6 +47,25 @@ def test_normalize_user_type_defaults_to_consumer():
     assert module._normalize_user_type("b") == "B"
 
 
+def test_canonicalize_user_type_prefers_usertype_and_aligns_legacy_field():
+    module = _load_module()
+
+    item_with_both = {"Type": "C", "UserType": "B"}
+    module._canonicalize_user_type(item_with_both)
+
+    assert item_with_both == {"Type": "B", "UserType": "B"}
+
+    item_with_usertype_only = {"UserType": "b"}
+    module._canonicalize_user_type(item_with_usertype_only)
+
+    assert item_with_usertype_only == {"Type": "B", "UserType": "B"}
+
+    item_with_type_only = {"Type": "c"}
+    module._canonicalize_user_type(item_with_type_only)
+
+    assert item_with_type_only == {"Type": "C", "UserType": "C"}
+
+
 def test_json_safe_value_preserves_nested_attributes():
     module = _load_module()
 

@@ -1016,6 +1016,8 @@ class ProcessText(BaseStepFunction):
 
         assess_user_type = None
         assess_user_type_raw = assess_user_data.get("UserType")
+        if assess_user_type_raw is None:
+            assess_user_type_raw = assess_user_data.get("Type")
         if assess_user_type_raw:
             assess_user_type = str(assess_user_type_raw).strip().upper()
 
@@ -1128,9 +1130,9 @@ class ProcessText(BaseStepFunction):
                 return self.event
 
         else:
-            # Consumer (UserType != 'B') → existing Consumer Agent
+            # Consumer (Type != 'B') → existing Consumer Agent
             self.logger.info(
-                "Routing message to Consumer Agent (UserType != 'B')",
+                "Routing message to Consumer Agent (Type != 'B')",
                 extra={
                     "session_id": session_identifier,
                     "user_type": user_type,
