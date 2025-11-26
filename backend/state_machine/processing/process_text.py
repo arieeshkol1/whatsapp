@@ -1015,7 +1015,9 @@ class ProcessText(BaseStepFunction):
             assess_user_data = {}
 
         assess_user_type = None
-        assess_user_type_raw = assess_user_data.get("Type")
+        assess_user_type_raw = assess_user_data.get("UserType")
+        if assess_user_type_raw is None:
+            assess_user_type_raw = assess_user_data.get("Type")
         if assess_user_type_raw:
             assess_user_type = str(assess_user_type_raw).strip().upper()
 

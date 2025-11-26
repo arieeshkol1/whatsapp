@@ -171,17 +171,25 @@ def _normalize_user_type(user_type: Any) -> str:
 
 
 def _canonicalize_user_type(item: Dict[str, Any]) -> None:
-    """Normalise the user type, storing it in the legacy "Type" field only."""
+    """
+    Normalise the user type, ensuring the canonical ``UserType`` field is set.
+
+    ``Type`` is deprecated but still populated for backwards compatibility so
+    older consumers do not break while newer paths rely on ``UserType``.
+    """
 
     if not isinstance(item, dict):
         return
 
-    raw_user_type = item.get("Type")
+    raw_user_type = item.get("UserType")
     if raw_user_type is None:
-        raw_user_type = item.get("UserType")
+        raw_user_type = item.get("Type")
 
-    item["Type"] = _normalize_user_type(raw_user_type)
-    item.pop("UserType", None)
+    normalized = _normalize_user_type(raw_user_type)
+
+    item["UserType"] = normalized
+    # Keep the legacy field aligned to avoid surprising downstream consumers.
+    item["Type"] = normalized
 
 
 def _key_variants(e164: str) -> List[str]:
