@@ -44,6 +44,9 @@ ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
 USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
 
+# ---------------------------------------------------------------------------
+# Legacy / existing history helper (used for conversation state & old history)
+# ---------------------------------------------------------------------------
 _history_helper = (
     DynamoDBHelper(table_name=DYNAMODB_TABLE, endpoint_url=ENDPOINT_URL)
     if DYNAMODB_TABLE
@@ -66,6 +69,30 @@ SENSITIVE_CONVERSATION_STATE_KEYS = {
     "company_name",
     # note: 'date_of_event' is intentionally NOT excluded — tests expect it to persist
 }
+
+# ---------------------------------------------------------------------------
+# NEW: Interaction-history table handle (PK = business_number / to_number)
+# ---------------------------------------------------------------------------
+
+INTERACTION_HISTORY_TABLE_NAME = (
+    os.environ.get("INTERACTION_HISTORY_TABLE")
+    or os.environ.get("INTERACTION_TABLE")
+    or DYNAMODB_TABLE
+    or "Interaction-history"
+)
+
+_dynamodb_resource = boto3.resource("dynamodb", endpoint_url=ENDPOINT_URL)
+
+try:  # pragma: no cover - defensive init
+    _interaction_history_table = _dynamodb_resource.Table(
+        INTERACTION_HISTORY_TABLE_NAME
+    )
+except Exception:  # pragma: no cover
+    logger.exception(
+        "Failed to initialise Interaction-history table handle",
+        extra={"table_name": INTERACTION_HISTORY_TABLE_NAME},
+    )
+    _interaction_history_table = None
 
 
 def _as_epoch_decimal(raw: Optional[Any]) -> Decimal:
@@ -101,8 +128,14 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
 
 
 def _history_partition_keys(from_number: Optional[str]) -> List[str]:
-    """Return candidate partition keys for interaction history lookups."""
+    """Return candidate partition keys for interaction history lookups.
 
+    NOTE:
+    This is used only by the legacy _history_helper-based history / state,
+    which historically stored items keyed by the customer "from_number".
+    The new Interaction-history table for business analytics uses PK=to_number
+    and is handled separately via _interaction_history_table.
+    """
     if from_number is None:
         return []
 
@@ -588,6 +621,117 @@ def _extract_business_id_candidate_from_text(text: Optional[str]) -> Optional[st
 
 
 # ----------------------------------------------------------------------
+# NEW: Interaction-history helpers (PK = business_number, no to_number attr)
+# ----------------------------------------------------------------------
+def _save_interaction_to_history(
+    from_number: Optional[str],
+    business_number: Optional[str],
+    user_message: Optional[str],
+    message_type: Optional[str],
+    correlation_id: Optional[str],
+    conversation_id: Optional[int],
+    whatsapp_id: Optional[str],
+) -> Optional[str]:
+    """
+    Save a single interaction into the Interaction-history table.
+
+    PK = business_number (WhatsApp 'to' number)
+    SK = ISO UTC timestamp (YYYY-MM-DD prefix)
+
+    We deliberately do NOT store to_number as a separate attribute; it appears
+    only as PK.
+    """
+    if not _interaction_history_table or not business_number:
+        return None
+
+    # ISO-8601 UTC timestamp; starts with 'YYYY-MM-DD' which matches the
+    # sort_key_prefix used by the Business Agent (e.g. "2025-11-25").
+    timestamp_iso = datetime.utcnow().isoformat() + "Z"
+
+    item: Dict[str, Any] = {
+        "PK": str(business_number),
+        "SK": timestamp_iso,
+        "timestamp": timestamp_iso,
+        "from_number": str(from_number) if from_number else None,
+        "type": message_type or "text",
+        "user_message": user_message or "",
+        "correlation_id": correlation_id,
+        "conversation_id": int(conversation_id) if conversation_id else None,
+        "whatsapp_id": whatsapp_id,
+    }
+
+    # Strip None values to keep items clean
+    item = {k: v for k, v in item.items() if v is not None}
+
+    try:
+        _interaction_history_table.put_item(Item=item)
+    except ClientError as e:  # pragma: no cover - runtime logging
+        logger.exception(
+            "Failed to put item into Interaction-history",
+            extra={
+                "business_number": business_number,
+                "timestamp": timestamp_iso,
+                "error": str(e),
+            },
+        )
+        return None
+    except Exception:  # pragma: no cover - runtime logging
+        logger.exception(
+            "Unexpected error while putting Interaction-history item",
+            extra={"business_number": business_number, "timestamp": timestamp_iso},
+        )
+        return None
+
+    return timestamp_iso
+
+
+def _update_interaction_history_response(
+    business_number: Optional[str],
+    sort_key: Optional[str],
+    system_response: Optional[Dict[str, Any]],
+    raw_response: Optional[str],
+) -> None:
+    """
+    Attach system_response to an existing Interaction-history item.
+
+    NEW behavior:
+    - We ONLY store `system_response` (a map).
+    - We NO LONGER store top-level `raw_response` on the item.
+      The raw string is already available as system_response['raw_response'].
+    """
+    if (
+        not _interaction_history_table
+        or not business_number
+        or not sort_key
+        or system_response is None
+    ):
+        return
+
+    try:
+        _interaction_history_table.update_item(
+            Key={"PK": str(business_number), "SK": sort_key},
+            UpdateExpression="SET system_response = :sr",
+            ExpressionAttributeValues={
+                ":sr": system_response,
+            },
+        )
+    except ClientError as e:  # pragma: no cover - runtime logging
+        logger.exception(
+            "Failed to update Interaction-history with system_response",
+            extra={
+                "business_number": business_number,
+                "sort_key": sort_key,
+                "error": str(e),
+            },
+        )
+    except Exception:  # pragma: no cover - runtime logging
+        logger.exception(
+            "Unexpected error while updating Interaction-history",
+            extra={"business_number": business_number, "sort_key": sort_key},
+        )
+
+
+# ----------------------------------------------------------------------
 # Business Owner Agent invocation helper
 # ----------------------------------------------------------------------
 def _call_business_owner_agent(session_id: str, input_text: str) -> str:
@@ -597,14 +741,8 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
     IMPORTANT:
     - Consumer flow (C/empty) keeps using call_bedrock_agent (unchanged).
     - This helper is ONLY for user_type == "B".
-
-    NOTE:
-    Previously you saw a validationException in CloudWatch:
-      "Invocation of model ID ... with on-demand throughput isn’t supported"
-    That is a configuration issue on the Agent's model. This function just
-    logs the error and returns a safe fallback message.
     """
-    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6KNOO")
+    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6K6NOO")  # default
     agent_alias_id = os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID", "TSTALIASID")
 
     client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
@@ -623,9 +761,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
                 "Business-Owner-Agent invoke_agent returned no completion stream",
                 extra={"session_id": session_id},
             )
-            return (
-                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. " "אנא נסה/י שוב מאוחר יותר."
-            )
+            return "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. אנא נסה/י שוב מאוחר יותר."
 
         completion_chunks: List[str] = []
         try:
@@ -652,9 +788,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
                     "error": str(ese),
                 },
             )
-            return (
-                "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. " "אנא נסה/י שוב מאוחר יותר."
-            )
+            return "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. אנא נסה/י שוב מאוחר יותר."
 
         combined = "".join(completion_chunks).strip()
         return combined
@@ -662,7 +796,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
     except Exception:
         logger.exception("Failed to invoke Business-Owner-Agent")
         # Safe Hebrew fallback
-        return "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. " "אנא נסה/י שוב מאוחר יותר."
+        return "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. אנא נסה/י שוב מאוחר יותר."
 
 
 class ProcessText(BaseStepFunction):
@@ -706,8 +840,31 @@ class ProcessText(BaseStepFunction):
         if not last_seen_at:
             last_seen_at = self.event.get("raw_event", {}).get("last_seen_at")
 
+        # Message type (default to "text" if missing)
+        message_type = (
+            self.event.get("type") or message_payload.get("type", {}).get("S") or "text"
+        )
+
+        # Keep UsersInfo in sync
         _touch_user_info_record(from_number, last_seen_at or datetime.utcnow())
 
+        # ------------------------------------------------------------------
+        # NEW: Persist into Interaction-history with PK = business_number
+        # ------------------------------------------------------------------
+        business_number = to_number  # PK for Interaction-history
+        interaction_sort_key = _save_interaction_to_history(
+            from_number=from_number,
+            business_number=business_number,
+            user_message=self.text,
+            message_type=message_type,
+            correlation_id=self.correlation_id,
+            conversation_id=conversation_id,
+            whatsapp_id=current_whatsapp_id,
+        )
+
+        # ------------------------------------------------------------------
+        # Legacy conversation history (customer-centric, from_number-based)
+        # ------------------------------------------------------------------
         history_items = _fetch_conversation_history(from_number, conversation_id)
         history_lines = _format_history_messages(history_items, current_whatsapp_id)
 
@@ -869,6 +1026,7 @@ class ProcessText(BaseStepFunction):
             user_type = assess_user_type
         else:
             user_type = "C"
+
         # ------------------------------------------------------------------
         # Route to the correct agent
         # ------------------------------------------------------------------
@@ -970,10 +1128,28 @@ class ProcessText(BaseStepFunction):
                     "from_number": from_number,
                 },
             )
-            raw_response = call_bedrock_agent(
-                session_id=session_identifier,
-                input_text=consumer_input_text,
-            )
+            try:
+                raw_response = call_bedrock_agent(
+                    session_id=session_identifier,
+                    input_text=consumer_input_text,
+                )
+            except Exception as exc:
+                # IMPORTANT:
+                # If the Agent / tools (e.g., QueryBusinessRules) fail, we DO NOT
+                # crash the whole Lambda. We log and return a safe fallback.
+                self.logger.exception(
+                    "Error while calling Consumer Agent (call_bedrock_agent)",
+                    extra={
+                        "session_id": session_identifier,
+                        "from_number": from_number,
+                        "to_number": to_number,
+                        "error": str(exc),
+                    },
+                )
+                raw_response = (
+                    "מצטער, כרגע יש בעיה טכנית בעיבוד הבקשה שלך. "
+                    "אפשר לנסות שוב מאוחר יותר."
+                )
 
         # ------------------------------------------------------------------
         # From here down everything is the same pattern:
@@ -991,7 +1167,7 @@ class ProcessText(BaseStepFunction):
             if parsed is None:
                 # Fallback – keep raw string only (wrapped under raw_response)
                 self.logger.warning(
-                    "Bedrock response was not valid JSON even after best-effort parsing",
+                    "Bedrock/Agent response was not valid JSON after parsing",
                     extra={"session_id": session_identifier},
                 )
                 bedrock_response_json = {"raw_response": raw_response}
@@ -1057,10 +1233,9 @@ class ProcessText(BaseStepFunction):
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to persist conversation state")
 
-        # Persist system_response onto the history item for this WhatsApp message
+        # Persist system_response onto the legacy history item for this WhatsApp message
         if _history_helper and current_whatsapp_id and system_response is not None:
             try:
-                # Use same JSON for system_response and legacy bedrock_response
                 _history_helper.update_system_response(
                     partition_keys,
                     current_whatsapp_id,
@@ -1069,6 +1244,21 @@ class ProcessText(BaseStepFunction):
                 )
             except Exception:  # pragma: no cover - defensive logging
                 logger.exception("Failed to attach system response to history item")
+
+        # ------------------------------------------------------------------
+        # NEW: Also attach system_response to Interaction-history (no raw_response)
+        # ------------------------------------------------------------------
+        if (
+            system_response is not None
+            and business_number
+            and interaction_sort_key is not None
+        ):
+            _update_interaction_history_response(
+                business_number=business_number,
+                sort_key=interaction_sort_key,
+                system_response=system_response,
+                raw_response=raw_response,
+            )
 
         final_order_progress_summary = format_order_progress_summary(prompt_state)
 
@@ -1097,9 +1287,8 @@ class ProcessText(BaseStepFunction):
         self.event["conversation_state"] = conversation_state
 
         if system_response is not None:
-            # system_response and bedrock_response are intentionally identical
+            # ✅ Only one field now – no duplicate bedrock_response on the event
             self.event["system_response"] = system_response
-            self.event["bedrock_response"] = system_response
 
         # Keep top-level user_updates for backward compatibility (optional)
         if user_update_entries:
