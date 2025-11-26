@@ -2,21 +2,23 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# -------------------- LOGGING -------------------- #
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logger = logging.getLogger()
 logger.setLevel(LOG_LEVEL)
 
+# -------------------- DYNAMODB -------------------- #
+
 dynamodb = boto3.resource("dynamodb")
 
-# -------------------- TABLES -------------------- #
-
-# Existing rules table - use env overrides if provided
+# Existing rules table - use env overrides if provided (may or may not be used by this Lambda)
 RULES_TABLE_NAME = os.getenv("RULES_TABLE_NAME") or os.getenv("RULES_TABLE")
 RULES_TABLE_NAME = RULES_TABLE_NAME or "aws-whatsapp-rules-dev"
 rules_table = dynamodb.Table(RULES_TABLE_NAME)
@@ -25,13 +27,28 @@ rules_table = dynamodb.Table(RULES_TABLE_NAME)
 USERDATA_TABLE_NAME = os.getenv("USER_DATA_TABLE", "UserData")
 USERDATA_TABLE = dynamodb.Table(USERDATA_TABLE_NAME)
 
-# ✅ NEW: interaction history table (your real name)
+# Interaction history table
 HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE")
 HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
 
 # -------------------- HELPERS -------------------- #
+
+
+def _normalize_ddb_types(obj):
+    """
+    Recursively convert DynamoDB/boto3 types (e.g. Decimal)
+    to plain JSON-serializable Python types (int/float/str).
+    """
+    if isinstance(obj, list):
+        return [_normalize_ddb_types(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _normalize_ddb_types(v) for k, v in obj.items()}
+    if isinstance(obj, Decimal):
+        # Keep integers as int, non-integers as float
+        return int(obj) if obj % 1 == 0 else float(obj)
+    return obj
 
 
 def build_success_response(action_group, function, message_version, payload):
@@ -50,13 +67,15 @@ def build_success_response(action_group, function, message_version, payload):
       "messageVersion": ...
     }
     """
+    safe_payload = _normalize_ddb_types(payload)
+
     return {
         "response": {
             "actionGroup": action_group,
             "function": function,
             "functionResponse": {
                 "responseBody": {
-                    "TEXT": {"body": json.dumps(payload, ensure_ascii=False)}
+                    "TEXT": {"body": json.dumps(safe_payload, ensure_ascii=False)}
                 }
             },
         },
@@ -75,26 +94,36 @@ def build_error_response(
     return build_success_response(action_group, function, message_version, payload)
 
 
-# -------------------- BUSINESS RULES -------------------- #
+# -------------------- BUSINESS RULES (OPTIONAL) -------------------- #
 
 
 def get_business_rules(business_id: str) -> dict:
+    """
+    Read current rules for a business. This is optional in this Lambda,
+    but useful if the DB Agent also exposes rules-related actions.
+    """
     resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
     item = resp.get("Item")
     if not item:
         raise KeyError(f"No rules found for business_id={business_id}")
+
     rules_json = item.get("rules_json")
     if not rules_json:
         raise KeyError(f"rules_json missing for business_id={business_id}")
+
     rules = json.loads(rules_json)
     return {
         "business_id": business_id,
         "version": item.get("version", "v1"),
         "rules": rules,
+        "updated_at": item.get("updated_at"),
     }
 
 
 def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
+    """
+    Create or update the CURRENT rules for a business.
+    """
     now = datetime.now(timezone.utc).isoformat()
     rules_table.put_item(
         Item={
@@ -142,12 +171,12 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
     """
     Query the Interaction-history table.
 
-    Schema (updated):
-      PK = WhatsApp business "to" number
+    Schema:
+      PK = WhatsApp business "to" number  (business_id)
       SK = local-time ISO 8601 timestamp
 
-    We get from Bedrock:
-      partition_key: used as PK
+    Called from Bedrock with:
+      partition_key: used as PK (business_id / to_number)
       sort_key_prefix: date in 'YYYY-MM-DD' format (matched against SK prefix)
     """
     try:
@@ -185,11 +214,12 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
                 "to_number": item.get("to_number") or item.get("PK"),
                 "user_message": item.get("user_message") or item.get("text"),
                 "system_response": item.get("system_response"),
+                "raw_response": item.get("raw_response"),
                 "type": item.get("type"),
             }
         )
 
-    return {
+    result = {
         "status": "ok",
         "table": HISTORY_TABLE_NAME,
         "partition_key": partition_key,
@@ -198,11 +228,28 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
         "interactions": interactions,
     }
 
+    # Normalize here too (harmless if already normalized)
+    return _normalize_ddb_types(result)
+
 
 # -------------------- LAMBDA HANDLER -------------------- #
 
 
 def lambda_handler(event, context):
+    """
+    Entry point for the DB Agent Lambda.
+
+    Expects events from Bedrock Agents in the format:
+      {
+        "actionGroup": "...",
+        "function": "...",
+        "messageVersion": "1.0",
+        "parameters": [
+          {"name": "...", "type": "string", "value": "..."},
+          ...
+        ]
+      }
+    """
     try:
         logger.info("Received event: %s", json.dumps(event, ensure_ascii=False))
 
@@ -214,7 +261,7 @@ def lambda_handler(event, context):
         raw_params = event.get("parameters", []) or []
         params = {p.get("name"): p.get("value") for p in raw_params if p.get("name")}
 
-        # ---------------- EXISTING FUNCTIONS ---------------- #
+        # ---------------- BUSINESS RULES (OPTIONAL) ---------------- #
 
         if function == "GetBusinessRules":
             business_id = params.get("business_id")
@@ -311,12 +358,9 @@ def lambda_handler(event, context):
                 action_group, function, message_version, result
             )
 
-        # ---------------- NEW: QueryInteractionHistory ---------------- #
+        # ---------------- INTERACTION HISTORY ---------------- #
 
         elif function == "QueryInteractionHistory":
-            # Current action group schema (from traces):
-            #   partition_key: string
-            #   sort_key_prefix: string (YYYY-MM-DD)
             partition_key = params.get("partition_key")
             sort_key_prefix = params.get("sort_key_prefix")
 
