@@ -31,8 +31,36 @@ HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE
 HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
+def build_error_response(
+    action_group, function, message_version, message, code="ERROR"
+):
+    payload = {
+        "status": "error",
+        "error_code": code,
+        "message": message,
+    }
+    return build_success_response(action_group, function, message_version, payload)
+
+
+# -------------------- BUSINESS RULES -------------------- #
+
+def get_business_rules(business_id: str) -> dict:
+    resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
+    item = resp.get("Item")
+    if not item:
+        raise KeyError(f"No rules found for business_id={business_id}")
+    rules_json = item.get("rules_json")
+    if not rules_json:
+        raise KeyError(f"rules_json missing for business_id={business_id}")
+    rules = json.loads(rules_json)
+    return {
+        "business_id": business_id,
+        "version": item.get("version", "v1"),
+        "rules": rules,
+    }
 
 # -------------------- JSON / DECIMAL HELPERS -------------------- #
+
 
 def _json_default(o):
     """
@@ -45,6 +73,7 @@ def _json_default(o):
 
 
 # -------------------- HELPERS -------------------- #
+
 
 def build_success_response(action_group, function, message_version, payload):
     """
@@ -95,6 +124,7 @@ def build_error_response(
 
 # -------------------- BUSINESS RULES -------------------- #
 
+
 def get_business_rules(business_id: str) -> dict:
     resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
     item = resp.get("Item")
@@ -131,6 +161,7 @@ def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
 
 # -------------------- USER DATA -------------------- #
 
+
 def update_user_business_id(phone_number: str, business_id: str) -> dict:
     """
     Adds or updates the BusinessId field for the user in UserData table.
@@ -152,6 +183,7 @@ def update_user_business_id(phone_number: str, business_id: str) -> dict:
 
 
 # -------------------- INTERACTION HISTORY -------------------- #
+
 
 def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
     """
@@ -221,6 +253,7 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
 
 
 # -------------------- LAMBDA HANDLER -------------------- #
+
 
 def lambda_handler(event, context):
     try:
