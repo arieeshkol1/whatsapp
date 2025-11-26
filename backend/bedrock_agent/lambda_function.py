@@ -43,48 +43,7 @@ HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE
 HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
 history_table = dynamodb.Table(HISTORY_TABLE_NAME)
 
-# Interaction history table
-HISTORY_TABLE_NAME = os.getenv("DYNAMODB_TABLE") or os.getenv("INTERACTION_TABLE")
-HISTORY_TABLE_NAME = HISTORY_TABLE_NAME or "Interaction-history"
-history_table = dynamodb.Table(HISTORY_TABLE_NAME)
-
 # -------------------- HELPERS -------------------- #
-
-
-def build_success_response(action_group, function, message_version, payload):
-    """
-    Response format expected by Bedrock Agents:
-    {
-      "response": {
-        "actionGroup": "...",
-        "function": "...",
-        "functionResponse": {
-          "responseBody": {
-            "TEXT": { "body": "<json string>" }
-          }
-        }
-      },
-      "messageVersion": "1.0"
-    }
-    """
-    return {
-        "response": {
-            "actionGroup": action_group,
-            "function": function,
-            "functionResponse": {
-                "responseBody": {
-                    "TEXT": {
-                        "body": json.dumps(
-                            payload,
-                            ensure_ascii=False,
-                            default=_json_default,
-                        )
-                    }
-                }
-            },
-        },
-        "messageVersion": message_version,
-    }
 
 def build_success_response(action_group, function, message_version, payload):
     """
@@ -131,9 +90,7 @@ def build_error_response(
     }
     return build_success_response(action_group, function, message_version, payload)
 
-
 # -------------------- BUSINESS RULES -------------------- #
-
 
 def get_business_rules(business_id: str) -> dict:
     resp = rules_table.get_item(Key={"PK": business_id, "SK": "CURRENT"})
@@ -149,8 +106,6 @@ def get_business_rules(business_id: str) -> dict:
         "version": item.get("version", "v1"),
         "rules": rules,
     }
-    return build_success_response(action_group, function, message_version, payload)
-
 
 def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
     now = datetime.now(timezone.utc).isoformat()
@@ -169,9 +124,7 @@ def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
         "updated_at": now,
     }
 
-
 # -------------------- USER DATA -------------------- #
-
 
 def update_user_business_id(phone_number: str, business_id: str) -> dict:
     """
@@ -192,9 +145,7 @@ def update_user_business_id(phone_number: str, business_id: str) -> dict:
         "updated_at": now,
     }
 
-
 # -------------------- INTERACTION HISTORY -------------------- #
-
 
 def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
     """
@@ -262,9 +213,7 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
         "interactions": interactions,
     }
 
-
 # -------------------- LAMBDA HANDLER -------------------- #
-
 
 def lambda_handler(event, context):
     try:
