@@ -1106,9 +1106,7 @@ class ProcessText(BaseStepFunction):
 
         # Some callers (e.g., direct Lambda invocations) may provide an
         # explicit user type on the event.
-        event_user_type_raw = self.event.get("user_type") or self.event.get(
-            "UserType"
-        )
+        event_user_type_raw = self.event.get("user_type") or self.event.get("UserType")
         event_user_type = (
             str(event_user_type_raw).strip().upper() if event_user_type_raw else None
         )
