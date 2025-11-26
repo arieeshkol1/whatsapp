@@ -1086,29 +1086,57 @@ class ProcessText(BaseStepFunction):
 
         assess_user_type = None
         # assess_changes emits the canonical UserType field; the legacy "Type"
-        # value is deprecated and not used for routing decisions.
+        # value is deprecated but read for backwards compatibility.
         assess_user_type_raw = assess_user_data.get("UserType")
         if assess_user_type_raw is None:
             assess_user_type_raw = assess_user_data.get("Type")
         if assess_user_type_raw:
             assess_user_type = str(assess_user_type_raw).strip().upper()
 
+        # Business users set by the Business Agent are expected to carry a
+        # BusinessId; when present we should prioritize routing to the business
+        # agent even if UserType was not explicitly set to "B".
+        assess_business_id: Optional[str] = None
+        try:
+            assess_business_id = _normalize_business_id(
+                assess_user_data.get("BusinessId")
+            )
+        except Exception:
+            assess_business_id = None
+
+        # Some callers (e.g., direct Lambda invocations) may provide an
+        # explicit user type on the event.
+        event_user_type_raw = self.event.get("user_type") or self.event.get(
+            "UserType"
+        )
+        event_user_type = (
+            str(event_user_type_raw).strip().upper() if event_user_type_raw else None
+        )
+
         # 3) Final decision:
-        #    - If assess_changes marks this as B (Type == "B"), TREAT AS BUSINESS.
-        #    - Otherwise, if metadata explicitly says C, treat as Consumer.
-        #    - Otherwise, if metadata says B, treat as Business.
+        #    - If event metadata marks this as B, treat as Business.
+        #    - If assess_changes marks this as B (Type == "B"), treat as Business.
+        #    - If metadata explicitly says B, treat as Business.
+        #    - If assess_changes includes a BusinessId, treat as Business.
+        #    - If metadata explicitly says C, treat as Consumer.
         #    - Default: Consumer.
         user_type = "C"
         user_type_source = "default"
 
-        if assess_user_type == "B":
+        if event_user_type == "B":
+            user_type = "B"
+            user_type_source = "event.user_type"
+        elif assess_user_type == "B":
             user_type = "B"
             user_type_source = "assess_changes.Type"
-        elif metadata_user_type in ("C",):
-            user_type = "C"
-            user_type_source = "metadata"
         elif metadata_user_type in ("B",):
             user_type = "B"
+            user_type_source = "metadata"
+        elif assess_business_id:
+            user_type = "B"
+            user_type_source = "assess_changes.BusinessId"
+        elif metadata_user_type in ("C",):
+            user_type = "C"
             user_type_source = "metadata"
 
         self.logger.info(
@@ -1118,6 +1146,8 @@ class ProcessText(BaseStepFunction):
                 "user_type_source": user_type_source,
                 "metadata_user_type": metadata_user_type,
                 "assess_user_type": assess_user_type,
+                "event_user_type": event_user_type,
+                "assess_business_id": assess_business_id,
             },
         )
 
@@ -1132,7 +1162,7 @@ class ProcessText(BaseStepFunction):
             business_id: Optional[str] = None
 
             # 1) Prefer BusinessId stored on user_data (once Agent sets it)
-            candidate = assess_user_data.get("BusinessId")
+            candidate = assess_business_id or assess_user_data.get("BusinessId")
             if candidate:
                 business_id = _normalize_business_id(candidate)
 
