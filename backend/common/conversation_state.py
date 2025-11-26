@@ -149,7 +149,7 @@ def format_order_progress_summary(state: Optional[Dict[str, Any]]) -> Optional[s
     if not state:
         return None
 
-    lines = ["נתונים שאספנו עד כה להזמנה:"]
+    lines: list[str] = []
 
     if state.get("age_verified") is True:
         lines.append("• כל המשתתפים באירוע מעל גיל 18")
@@ -177,7 +177,7 @@ def format_order_progress_summary(state: Optional[Dict[str, Any]]) -> Optional[s
     if state.get("order_id"):
         lines.append(f"• מזהה הזמנה שזוהה: {state['order_id']}")
 
-    if len(lines) == 1:
+    if not lines:
         return None
 
     return "\n".join(lines)
