@@ -15,6 +15,7 @@ logger.setLevel(LOG_LEVEL)
 
 # -------------------- JSON / DECIMAL HELPERS -------------------- #
 
+# -------------------- TABLES -------------------- #
 
 def _json_default(o):
     """
@@ -25,6 +26,9 @@ def _json_default(o):
         return int(o) if o % 1 == 0 else float(o)
     raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
+# UserData table
+USERDATA_TABLE_NAME = os.getenv("USER_DATA_TABLE", "UserData")
+USERDATA_TABLE = dynamodb.Table(USERDATA_TABLE_NAME)
 
 dynamodb = boto3.resource("dynamodb")
 
