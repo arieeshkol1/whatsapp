@@ -1022,7 +1022,7 @@ class ProcessText(BaseStepFunction):
             assess_user_type = str(assess_user_type_raw).strip().upper()
 
         # 3) Final decision:
-        #    - If assess_changes marks this as B (UserType == "B"), TREAT AS BUSINESS.
+        #    - If assess_changes marks this as B (Type == "B"), TREAT AS BUSINESS.
         #    - Otherwise, if metadata explicitly says C, treat as Consumer.
         #    - Otherwise, if metadata says B, treat as Business.
         #    - Default: Consumer.
@@ -1031,7 +1031,7 @@ class ProcessText(BaseStepFunction):
 
         if assess_user_type == "B":
             user_type = "B"
-            user_type_source = "assess_changes.UserType"
+            user_type_source = "assess_changes.Type"
         elif metadata_user_type in ("C",):
             user_type = "C"
             user_type_source = "metadata"
