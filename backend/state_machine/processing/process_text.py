@@ -128,7 +128,7 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
 
 
 def _history_partition_keys(from_number: Optional[str]) -> List[str]:
-    """Return candidate partition keys for interaction history lookups.
+    """Return candidate partition keys for legacy interaction history lookups.
 
     NOTE:
     This is used only by the legacy _history_helper-based history / state,
@@ -742,7 +742,8 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
     - Consumer flow (C/empty) keeps using call_bedrock_agent (unchanged).
     - This helper is ONLY for user_type == "B".
     """
-    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6K6NOO")  # default
+    # Correct default Agent ID for the Business Agent
+    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6KNOO")
     agent_alias_id = os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID", "TSTALIASID")
 
     client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
@@ -801,7 +802,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
 
 class ProcessText(BaseStepFunction):
     """
-    This class contains methods that serve as the "text processing" for the State Machine.
+    This class contains methods that serve as the "text processing" for the State Machine".
     """
 
     def __init__(self, event):
@@ -981,12 +982,8 @@ class ProcessText(BaseStepFunction):
         )
 
         # ------------------------------------------------------------------
-        # Determine user type:
-        # 1) Prefer metadata in the text itself (e.g. "[user_type=B]").
-        # 2) Fallback to assess_changes.user_data.UserType from the event.
-        # If nothing is known, treat as consumer ("C").
+        # Determine user type (Business vs Consumer)
         # ------------------------------------------------------------------
-        user_type = "C"
 
         # 1) Try to detect user_type from a leading metadata line inside the text.
         metadata_user_type = None
@@ -1006,26 +1003,49 @@ class ProcessText(BaseStepFunction):
         except Exception:
             metadata_user_type = None
 
-        # 2) Read assess_changes.user_data.UserType from the event if available.
-        assess_user_type = None
+        # 2) Read assess_changes.user_data once
+        assess_user_data: Dict[str, Any] = {}
         try:
-            assess_user_type_value = (
-                self.event.get("assess_changes", {})
-                .get("user_data", {})
-                .get("UserType")
+            assess_user_data_obj = self.event.get("assess_changes", {}).get(
+                "user_data", {}
             )
-            if assess_user_type_value:
-                assess_user_type = str(assess_user_type_value).strip().upper()
-        except Exception:  # pragma: no cover - safety
-            assess_user_type = None
+            if isinstance(assess_user_data_obj, dict):
+                assess_user_data = assess_user_data_obj
+        except Exception:  # pragma: no cover
+            assess_user_data = {}
 
-        # 3) Final decision: metadata wins over assess_changes.
-        if metadata_user_type in ("B", "C"):
-            user_type = metadata_user_type
-        elif assess_user_type in ("B", "C"):
-            user_type = assess_user_type
-        else:
+        assess_user_type = None
+        assess_user_type_raw = assess_user_data.get("UserType")
+        if assess_user_type_raw:
+            assess_user_type = str(assess_user_type_raw).strip().upper()
+
+        # 3) Final decision:
+        #    - If assess_changes marks this as B (UserType == "B"), TREAT AS BUSINESS.
+        #    - Otherwise, if metadata explicitly says C, treat as Consumer.
+        #    - Otherwise, if metadata says B, treat as Business.
+        #    - Default: Consumer.
+        user_type = "C"
+        user_type_source = "default"
+
+        if assess_user_type == "B":
+            user_type = "B"
+            user_type_source = "assess_changes.UserType"
+        elif metadata_user_type in ("C",):
             user_type = "C"
+            user_type_source = "metadata"
+        elif metadata_user_type in ("B",):
+            user_type = "B"
+            user_type_source = "metadata"
+
+        self.logger.info(
+            "Determined user type for routing",
+            extra={
+                "user_type": user_type,
+                "user_type_source": user_type_source,
+                "metadata_user_type": metadata_user_type,
+                "assess_user_type": assess_user_type,
+            },
+        )
 
         # ------------------------------------------------------------------
         # Route to the correct agent
@@ -1036,20 +1056,9 @@ class ProcessText(BaseStepFunction):
             # Resolve business_id for this business user if possible.
             # --------------------------------------------------------------
             business_id: Optional[str] = None
-            assess_user_data: Dict[str, Any] = {}
-            try:
-                assess_user_data_obj = self.event.get("assess_changes", {}).get(
-                    "user_data", {}
-                )
-                if isinstance(assess_user_data_obj, dict):
-                    assess_user_data = assess_user_data_obj
-            except Exception:  # pragma: no cover
-                assess_user_data = {}
 
             # 1) Prefer BusinessId stored on user_data (once Agent sets it)
-            candidate = assess_user_data.get("BusinessId") or assess_user_data.get(
-                "BusinessID"
-            )
+            candidate = assess_user_data.get("BusinessId")
             if candidate:
                 business_id = str(candidate).strip()
 
@@ -1119,9 +1128,9 @@ class ProcessText(BaseStepFunction):
                 return self.event
 
         else:
-            # Consumer (UserType = 'C' or missing/empty) → existing Consumer Agent
+            # Consumer (UserType != 'B') → existing Consumer Agent
             self.logger.info(
-                "Routing message to Consumer Agent (UserType = 'C' or empty)",
+                "Routing message to Consumer Agent (UserType != 'B')",
                 extra={
                     "session_id": session_identifier,
                     "user_type": user_type,
@@ -1147,8 +1156,8 @@ class ProcessText(BaseStepFunction):
                     },
                 )
                 raw_response = (
-                    "מצטער, כרגע יש בעיה טכנית בעיבוד הבקשה שלך. "
-                    "אפשר לנסות שוב מאוחר יותר."
+                    "מצטער, הייתה בעיה זמנית בעיבוד הבקשה שלך. "
+                    "אנא נסה/י שוב מאוחר יותר."
                 )
 
         # ------------------------------------------------------------------
