@@ -68,26 +68,32 @@ def query_by_conversation(
     partition_key: str, conversation_id: int, limit: int = 50
 ) -> List[Dict[str, Any]]:
     """
-    Query messages for a conversation ID
-    SK format: MESSAGE#<timestamp> or STATE#<conversation_id>
-    """
-    prefix = "MESSAGE#"
-    try:
-        condition = Key("PK").eq(partition_key) & Key("SK").begins_with(prefix)
+    Query messages for a conversation ID using the new Interactions_History schema.
 
-        response = table.query(KeyConditionExpression=condition, Limit=limit)
+    Schema:
+      PK = ToNumber (WhatsApp business number)
+      SK = ISO 8601 timestamp (starts with YYYY-MM-DD)
+    """
+    try:
+        condition = Key("PK").eq(partition_key)
+
+        response = table.query(
+            KeyConditionExpression=condition,
+            Limit=limit,
+            FilterExpression="conversation_id = :c",
+            ExpressionAttributeValues={":c": conversation_id},
+        )
         items = response.get("Items", [])
 
         while "LastEvaluatedKey" in response:
             response = table.query(
                 KeyConditionExpression=condition,
                 Limit=limit,
+                FilterExpression="conversation_id = :c",
+                ExpressionAttributeValues={":c": conversation_id},
                 ExclusiveStartKey=response["LastEvaluatedKey"],
             )
             items.extend(response.get("Items", []))
-
-        # Filter by conversation_id
-        items = [i for i in items if i.get("conversation_id") == conversation_id]
 
         return items
 

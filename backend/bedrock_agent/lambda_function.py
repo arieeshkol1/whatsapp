@@ -163,23 +163,18 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
     """
     Query the Interaction-history table.
 
-    CURRENT REAL SCHEMA (from your data):
-      PK = from_number (the sender phone)
-      SK = "MESSAGE#<ISO8601 timestamp>"
+    UPDATED SCHEMA (Interactions_History):
+      PK = ToNumber (WhatsApp business number)
+      SK = ISO 8601 UTC timestamp (starts with "YYYY-MM-DD")
 
     Bedrock action group passes:
-      partition_key   -> phone number whose messages we want
-      sort_key_prefix -> date in 'YYYY-MM-DD' format
-
-    We must convert the date into the SK prefix actually stored in DynamoDB:
-      "MESSAGE#YYYY-MM-DD"
+      partition_key   -> ToNumber value (PK)
+      sort_key_prefix -> date in 'YYYY-MM-DD' format (matches SK prefix)
     """
-    sk_prefix = f"MESSAGE#{sort_key_prefix}"
-
     try:
         response = history_table.query(
             KeyConditionExpression=Key("PK").eq(partition_key)
-            & Key("SK").begins_with(sk_prefix)
+            & Key("SK").begins_with(sort_key_prefix)
         )
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code", "Unknown")
@@ -204,11 +199,12 @@ def query_interaction_history(partition_key: str, sort_key_prefix: str) -> dict:
             {
                 "pk": item.get("PK"),
                 "sk": item.get("SK"),
-                "timestamp": item.get("created_at") or item.get("SK"),
+                "timestamp": item.get("timestamp") or item.get("SK"),
                 "conversation_id": item.get("conversation_id"),
                 "correlation_id": item.get("correlation_id"),
                 "from_number": item.get("from_number"),
-                "text": item.get("text"),
+                "to_number": item.get("PK"),
+                "user_message": item.get("user_message"),
                 "type": item.get("type"),
                 "system_response": item.get("system_response"),
                 "whatsapp_id": item.get("whatsapp_id"),
