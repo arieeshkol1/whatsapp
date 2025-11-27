@@ -1235,6 +1235,8 @@ class ProcessText(BaseStepFunction):
                 )
                 self.response_message = ask_message
                 self.event["response_message"] = ask_message
+                # Hard guarantee: no order_progress_summary is propagated
+                self.event.pop("order_progress_summary", None)
                 return self.event
 
         else:
@@ -1396,8 +1398,6 @@ class ProcessText(BaseStepFunction):
                 raw_response=raw_response,
             )
 
-        final_order_progress_summary = format_order_progress_summary(prompt_state)
-
         # ------------------------------------------------------------------
         # Produce the final WhatsApp reply (plain text only)
         # ------------------------------------------------------------------
@@ -1412,8 +1412,7 @@ class ProcessText(BaseStepFunction):
         self.event["response_message"] = self.response_message
         if customer_summary:
             self.event["customer_summary"] = customer_summary
-        if final_order_progress_summary:
-            self.event["order_progress_summary"] = final_order_progress_summary
+        # Explicitly DO NOT propagate order_progress_summary anymore
         self.event["conversation_state"] = conversation_state
 
         if system_response is not None:
@@ -1423,5 +1422,8 @@ class ProcessText(BaseStepFunction):
         # Keep top-level user_updates for backward compatibility (optional)
         if user_update_entries:
             self.event["user_updates"] = user_update_entries
+
+        # Hard guarantee: ensure no leftover summary field exists
+        self.event.pop("order_progress_summary", None)
 
         return self.event
