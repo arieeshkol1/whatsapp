@@ -475,69 +475,87 @@ class ChatbotAPIStack(Stack):
         Compose environment variables for the state machine processor Lambda.
         """
 
-        base_environment: Dict[str, str] = {
-            "ENVIRONMENT": self.app_config["deployment_environment"],
-            "LOG_LEVEL": self.app_config["log_level"],
-            "SECRET_NAME": self.app_config["secret_name"],
-            "META_ENDPOINT": self.app_config["meta_endpoint"],
-            "ASSESS_CHANGES_FEATURE": "true",
-            # Use the actual table name (instead of hard-coding Interaction-history)
-            "DYNAMODB_TABLE": self.dynamodb_table.table_name,
-            "USER_DATA_TABLE": self.app_config.get(
-                "USER_DATA_TABLE",
-                (
-                    self.user_data_table.table_name
-                    if hasattr(self, "user_data_table")
-                    else USER_DATA_TABLE_DEFAULT_NAME
-                ),
+        user_data_table_name = self.app_config.get(
+            "USER_DATA_TABLE",
+            (
+                self.user_data_table.table_name
+                if hasattr(self, "user_data_table")
+                else USER_DATA_TABLE_DEFAULT_NAME
             ),
-            # Optional: expose the attribute name for the system response so the
-            # Lambda code can reference it without hard-coding the string.
-            "SYSTEM_RESPONSE_ATTRIBUTE": INTERACTION_SYSTEM_RESPONSE_ATTRIBUTE_NAME,
-        }
+        )
 
-        optional_values: Dict[str, Optional[str]] = {
-            "AGENT_ID": self.app_config.get("bedrock_agent_id"),
-            "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id"),
-            "AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
-            "BEDROCK_AGENT_ALIAS_ID": self.app_config.get("bedrock_agent_alias_id"),
-            "BUSINESS_AGENT_ID": self.app_config.get("business_agent_id"),
-            "BUSINESS_AGENT_ALIAS_ID": self.app_config.get("business_agent_alias_id"),
+        rules_table_name = (
+            self.app_config.get("RULES_TABLE_NAME")
+            or self.app_config.get("rules_table_name")
+            or (
+                self.rules_dynamodb_table.table_name
+                if self.rules_dynamodb_table
+                else None
+            )
+            or "aws-whatsapp-rules-dev"
+        )
+
+        base_environment: Dict[str, str] = {
+            "AGENT_ID": self.app_config.get("bedrock_agent_id", "3UEECXPUFI"),
+            "AGENT_ALIAS_ID": self.app_config.get(
+                "bedrock_agent_alias_id", "TSTALIASID"
+            ),
+            "ASSESS_CHANGES_FEATURE": "true",
+            "BEDROCK_AGENT_ID": self.app_config.get("bedrock_agent_id", "3UEECXPUFI"),
+            "BEDROCK_AGENT_ALIAS_ID": self.app_config.get(
+                "bedrock_agent_alias_id", "TSTALIASID"
+            ),
+            "BUSINESS_AGENT_ID": (
+                self.app_config.get("business_agent_id")
+                or self.app_config.get("BUSINESS_AGENT_ID")
+                or "JINCH6KNOO"
+            ),
+            "BUSINESS_AGENT_ALIAS_ID": (
+                self.app_config.get("business_agent_alias_id")
+                or self.app_config.get("BUSINESS_AGENT_ALIAS_ID")
+                or "TSTALIASID"
+            ),
             "CONSUMER_AGENT_ID": (
                 self.app_config.get("consumer_agent_id")
                 or self.app_config.get("bedrock_agent_id")
+                or "3UEECXPUFI"
             ),
             "CONSUMER_AGENT_ALIAS_ID": (
                 self.app_config.get("consumer_agent_alias_id")
                 or self.app_config.get("bedrock_agent_alias_id")
+                or "TSTALIASID"
             ),
+            "DYNAMODB_TABLE": self.dynamodb_table.table_name,
+            "ENVIRONMENT": self.app_config["deployment_environment"],
+            "LOG_LEVEL": self.app_config["log_level"],
+            "META_ENDPOINT": self.app_config["meta_endpoint"],
+            "RULES_TABLE": (
+                self.app_config.get("RULES_TABLE")
+                or (
+                    self.rules_dynamodb_table.table_name
+                    if self.rules_dynamodb_table
+                    else None
+                )
+                or "aws-whatsapp-rules-dev"
+            ),
+            "RULES_TABLE_NAME": rules_table_name,
+            "RULESET_ID": self.app_config.get("RULESET_ID", "default"),
+            "RULESET_VERSION": self.app_config.get("RULESET_VERSION", "CURRENT"),
+            "SECRET_NAME": self.app_config["secret_name"],
+            # Optional: expose the attribute name for the system response so the
+            # Lambda code can reference it without hard-coding the string.
+            "SYSTEM_RESPONSE_ATTRIBUTE": INTERACTION_SYSTEM_RESPONSE_ATTRIBUTE_NAME,
+            "USER_DATA_TABLE": user_data_table_name,
+        }
+
+        optional_values: Dict[str, Optional[str]] = {
             "DB_AGENT_ID": self.app_config.get("db_agent_id"),
             "DB_AGENT_ALIAS_ID": self.app_config.get("db_agent_alias_id"),
-            "USER_DATA_TABLE": (
-                self.user_data_table.table_name
-                if hasattr(self, "user_data_table")
-                else None
-            ),
         }
 
         for key, value in optional_values.items():
             if value:
                 base_environment[key] = value
-
-        optional_rules_environment: Dict[str, Optional[str]] = {
-            "RULES_TABLE_NAME": self.app_config.get("rules_table_name"),
-            "RULESET_ID": self.app_config.get("ruleset_id"),
-            "RULESET_VERSION": self.app_config.get("ruleset_version"),
-        }
-
-        for key, value in optional_rules_environment.items():
-            if value:
-                base_environment[key] = value
-
-        if self.app_config.get("RULES_TABLE"):
-            base_environment["RULES_TABLE"] = self.app_config["RULES_TABLE"]
-        elif self.rules_dynamodb_table:
-            base_environment["RULES_TABLE"] = self.rules_dynamodb_table.table_name
 
         return base_environment
 
