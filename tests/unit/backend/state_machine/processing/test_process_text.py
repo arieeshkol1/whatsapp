@@ -67,6 +67,18 @@ def test_process_text_persists_user_updates(monkeypatch):
     _stub_routing_dependencies(monkeypatch)
     monkeypatch.setattr(
         process_text_module,
+        "_save_interaction_to_history",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        process_text_module, "_touch_user_info_record", lambda *args, **kwargs: None
+    )
+
+
+def test_process_text_persists_user_updates(monkeypatch):
+    _stub_routing_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        process_text_module,
         "call_bedrock_agent",
         lambda **_: json.dumps(
             {
@@ -114,7 +126,9 @@ def test_business_user_routes_to_business_agent(monkeypatch):
         return "business-response"
 
     monkeypatch.setattr(process_text_module, "call_bedrock_agent", fake_consumer)
-    monkeypatch.setattr(process_text_module, "_call_business_owner_agent", fake_business)
+    monkeypatch.setattr(
+        process_text_module, "_call_business_owner_agent", fake_business
+    )
 
     event = _base_event()
     event["assess_changes"] = {
@@ -137,7 +151,9 @@ def test_consumer_user_routes_to_consumer_agent(monkeypatch):
 
     business_called = False
 
-    def fake_business(session_id: str, input_text: str) -> str:  # pragma: no cover - safety
+    def fake_business(
+        session_id: str, input_text: str
+    ) -> str:  # pragma: no cover - safety
         nonlocal business_called
         business_called = True
         return "business"
@@ -149,7 +165,9 @@ def test_consumer_user_routes_to_consumer_agent(monkeypatch):
         return "consumer-response"
 
     monkeypatch.setattr(process_text_module, "call_bedrock_agent", fake_consumer)
-    monkeypatch.setattr(process_text_module, "_call_business_owner_agent", fake_business)
+    monkeypatch.setattr(
+        process_text_module, "_call_business_owner_agent", fake_business
+    )
 
     event = _base_event()
     event["assess_changes"] = {"user_data": {"UserType": "C", "BusinessId": ""}}
@@ -170,7 +188,9 @@ def test_default_user_routes_to_consumer_agent(monkeypatch):
 
     business_called = False
 
-    def fake_business(session_id: str, input_text: str) -> str:  # pragma: no cover - safety
+    def fake_business(
+        session_id: str, input_text: str
+    ) -> str:  # pragma: no cover - safety
         nonlocal business_called
         business_called = True
         return "business"
@@ -182,12 +202,16 @@ def test_default_user_routes_to_consumer_agent(monkeypatch):
         return "consumer-response"
 
     monkeypatch.setattr(process_text_module, "call_bedrock_agent", fake_consumer)
-    monkeypatch.setattr(process_text_module, "_call_business_owner_agent", fake_business)
+    monkeypatch.setattr(
+        process_text_module, "_call_business_owner_agent", fake_business
+    )
 
     event = _base_event()
     result = process_text_module.ProcessText(event).process_text()
 
-    assert not business_called, "Unspecified user type should default to consumer routing"
+    assert (
+        not business_called
+    ), "Unspecified user type should default to consumer routing"
     assert result["response_message"].startswith("consumer-response")
     assert captured["agent_id"] == "consumer-agent"
     assert captured["agent_alias_id"] == "consumer-alias"
