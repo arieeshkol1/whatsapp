@@ -487,7 +487,11 @@ class ChatbotAPIStack(Stack):
         rules_table_name = (
             self.app_config.get("RULES_TABLE_NAME")
             or self.app_config.get("rules_table_name")
-            or (self.rules_dynamodb_table.table_name if self.rules_dynamodb_table else None)
+            or (
+                self.rules_dynamodb_table.table_name
+                if self.rules_dynamodb_table
+                else None
+            )
             or "aws-whatsapp-rules-dev"
         )
 
@@ -527,7 +531,11 @@ class ChatbotAPIStack(Stack):
             "META_ENDPOINT": self.app_config["meta_endpoint"],
             "RULES_TABLE": (
                 self.app_config.get("RULES_TABLE")
-                or (self.rules_dynamodb_table.table_name if self.rules_dynamodb_table else None)
+                or (
+                    self.rules_dynamodb_table.table_name
+                    if self.rules_dynamodb_table
+                    else None
+                )
                 or "aws-whatsapp-rules-dev"
             ),
             "RULES_TABLE_NAME": rules_table_name,
