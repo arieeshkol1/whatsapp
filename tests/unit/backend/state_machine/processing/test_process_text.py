@@ -8,6 +8,10 @@ os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 from state_machine.processing import process_text as process_text_module
+from state_machine.processing.process_text import (
+    USER_TYPE_BUSINESS,
+    USER_TYPE_CONSUMER,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +61,18 @@ def _stub_routing_dependencies(monkeypatch):
     )
     monkeypatch.setattr(
         process_text_module, "_save_interaction_to_history", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        process_text_module, "_touch_user_info_record", lambda *args, **kwargs: None
+    )
+
+
+def test_process_text_persists_user_updates(monkeypatch):
+    _stub_routing_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        process_text_module,
+        "_save_interaction_to_history",
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
         process_text_module, "_touch_user_info_record", lambda *args, **kwargs: None
@@ -132,7 +148,7 @@ def test_business_user_routes_to_business_agent(monkeypatch):
 
     event = _base_event()
     event["assess_changes"] = {
-        "user_data": {"UserType": "B", "BusinessId": "972500000111"}
+        "user_data": {"UserType": USER_TYPE_BUSINESS, "BusinessId": "972500000111"}
     }
 
     result = process_text_module.ProcessText(event).process_text()
@@ -170,7 +186,9 @@ def test_consumer_user_routes_to_consumer_agent(monkeypatch):
     )
 
     event = _base_event()
-    event["assess_changes"] = {"user_data": {"UserType": "C", "BusinessId": ""}}
+    event["assess_changes"] = {
+        "user_data": {"UserType": USER_TYPE_CONSUMER, "BusinessId": ""}
+    }
 
     result = process_text_module.ProcessText(event).process_text()
 

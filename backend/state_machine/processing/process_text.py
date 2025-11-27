@@ -44,6 +44,9 @@ ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
 USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
 
+USER_TYPE_BUSINESS = "B"
+USER_TYPE_CONSUMER = "C"
+
 # ---------------------------------------------------------------------------
 # Legacy / existing history helper (used for conversation state & old history)
 # ---------------------------------------------------------------------------
@@ -780,7 +783,7 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
 
     IMPORTANT:
     - Consumer flow (C/empty) keeps using call_bedrock_agent (unchanged).
-    - This helper is ONLY for user_type == "B".
+    - This helper is ONLY for user_type == USER_TYPE_BUSINESS.
     """
     # Correct default Agent ID for the Business Agent
     agent_id = (
@@ -1029,7 +1032,7 @@ class ProcessText(BaseStepFunction):
         consumer_metadata_tokens: List[str] = []
         if from_number:
             consumer_metadata_tokens.append(f"[phone_number={from_number}]")
-        consumer_metadata_tokens.append("[user_type=C]")
+        consumer_metadata_tokens.append(f"[user_type={USER_TYPE_CONSUMER}]")
         if to_number:
             consumer_metadata_tokens.append(f"[to_number={to_number}]")
             normalized_business_id = _normalize_business_id(to_number)
@@ -1120,17 +1123,18 @@ class ProcessText(BaseStepFunction):
         #    - If still unknown and the sender is the business number itself,
         #      infer Business (owner) from the BusinessId match.
         #    - Default: Consumer.
-        user_type = "C"
+        user_type = USER_TYPE_CONSUMER
         user_type_source = "default"
 
         explicit_user_type: Optional[str] = None
-        if event_user_type in {"B", "C"}:
+        valid_user_types = {USER_TYPE_BUSINESS, USER_TYPE_CONSUMER}
+        if event_user_type in valid_user_types:
             explicit_user_type = event_user_type
             user_type_source = "event.user_type"
-        elif assess_user_type in {"B", "C"}:
+        elif assess_user_type in valid_user_types:
             explicit_user_type = assess_user_type
             user_type_source = "assess_changes.Type"
-        elif metadata_user_type in {"B", "C"}:
+        elif metadata_user_type in valid_user_types:
             explicit_user_type = metadata_user_type
             user_type_source = "metadata"
 
@@ -1138,7 +1142,7 @@ class ProcessText(BaseStepFunction):
             user_type = explicit_user_type
         elif assess_business_id and assess_business_id == normalized_from_number:
             # Business owner messaging from their own business number.
-            user_type = "B"
+            user_type = USER_TYPE_BUSINESS
             user_type_source = "assess_changes.BusinessId:from_number_match"
 
         self.logger.info(
@@ -1156,7 +1160,7 @@ class ProcessText(BaseStepFunction):
         # ------------------------------------------------------------------
         # Route to the correct agent
         # ------------------------------------------------------------------
-        if user_type == "B":
+        if user_type == USER_TYPE_BUSINESS:
             # --------------------------------------------------------------
             # Business owner path → Business-Owner-Agent
             # Resolve business_id for this business user if possible.
