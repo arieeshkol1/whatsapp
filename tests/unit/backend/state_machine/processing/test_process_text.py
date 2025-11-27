@@ -60,7 +60,9 @@ def _stub_routing_dependencies(monkeypatch):
         process_text_module, "format_order_progress_summary", lambda *_: None
     )
     monkeypatch.setattr(
-        process_text_module, "_save_interaction_to_history", lambda *args, **kwargs: None
+        process_text_module,
+        "_save_interaction_to_history",
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
         process_text_module, "_touch_user_info_record", lambda *args, **kwargs: None
