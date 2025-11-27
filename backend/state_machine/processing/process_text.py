@@ -44,6 +44,9 @@ ENDPOINT_URL = os.environ.get("ENDPOINT_URL")
 CONVERSATION_HISTORY_LIMIT = int(os.environ.get("CONVERSATION_HISTORY_LIMIT", "20"))
 USER_INFO_TABLE_NAME = os.environ.get("USER_INFO_TABLE")
 
+USER_TYPE_BUSINESS = "B"
+USER_TYPE_CONSUMER = "C"
+
 # ---------------------------------------------------------------------------
 # Legacy / existing history helper (used for conversation state & old history)
 # ---------------------------------------------------------------------------
@@ -125,6 +128,27 @@ def _normalize_phone(number: Optional[str]) -> Optional[str]:
     if stripped[0].isdigit():
         return f"+{stripped}"
     return stripped
+
+
+def _normalize_business_id(number: Optional[str]) -> Optional[str]:
+    """
+    Normalize the business identifier for Bedrock agents.
+
+    The Consumer Agent expects a digits-only string with no leading '+'.
+    """
+
+    if not number:
+        return None
+
+    stripped = str(number).strip()
+    if not stripped:
+        return None
+
+    digits_only = "".join(ch for ch in stripped if ch.isdigit())
+    if digits_only:
+        return digits_only
+
+    return stripped.lstrip("+") or None
 
 
 def _history_partition_keys(from_number: Optional[str]) -> List[str]:
@@ -600,6 +624,25 @@ def _parse_bedrock_json(raw: Optional[Any]) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _extract_answer_text(raw: Optional[str]) -> Optional[str]:
+    """Return the text wrapped in <answer>...</answer> tags when present."""
+
+    if not raw or not isinstance(raw, str):
+        return None
+
+    start_tag = "<answer>"
+    end_tag = "</answer>"
+
+    start_idx = raw.find(start_tag)
+    end_idx = raw.find(end_tag, start_idx + len(start_tag)) if start_idx != -1 else -1
+
+    if start_idx == -1 or end_idx == -1:
+        return None
+
+    inner = raw[start_idx + len(start_tag) : end_idx]
+    return inner.strip() or None
+
+
 def _extract_business_id_candidate_from_text(text: Optional[str]) -> Optional[str]:
     """
     Extract a phone-like business_id from the current message text.
@@ -740,11 +783,21 @@ def _call_business_owner_agent(session_id: str, input_text: str) -> str:
 
     IMPORTANT:
     - Consumer flow (C/empty) keeps using call_bedrock_agent (unchanged).
-    - This helper is ONLY for user_type == "B".
+    - This helper is ONLY for user_type == USER_TYPE_BUSINESS.
     """
     # Correct default Agent ID for the Business Agent
-    agent_id = os.environ.get("BUSINESS_OWNER_AGENT_ID", "JINCH6KNOO")
-    agent_alias_id = os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID", "TSTALIASID")
+    agent_id = (
+        os.environ.get("BUSINESS_AGENT_ID")
+        or os.environ.get("BUSINESS_OWNER_AGENT_ID")
+        or os.environ.get("AGENT_ID")
+        or "JINCH6KNOO"
+    )
+    agent_alias_id = (
+        os.environ.get("BUSINESS_AGENT_ALIAS_ID")
+        or os.environ.get("BUSINESS_OWNER_AGENT_ALIAS_ID")
+        or os.environ.get("AGENT_ALIAS_ID")
+        or "TSTALIASID"
+    )
 
     client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
 
@@ -973,7 +1026,27 @@ class ProcessText(BaseStepFunction):
             context_sections.append(user_profile_context)
 
         context_sections.append(f"הודעת הלקוח כעת:\n{self.text}")
-        consumer_input_text = "\n\n".join(context_sections)
+
+        consumer_context_block = "\n\n".join(context_sections)
+
+        consumer_metadata_tokens: List[str] = []
+        if from_number:
+            consumer_metadata_tokens.append(f"[phone_number={from_number}]")
+        consumer_metadata_tokens.append(f"[user_type={USER_TYPE_CONSUMER}]")
+        if to_number:
+            consumer_metadata_tokens.append(f"[to_number={to_number}]")
+            normalized_business_id = _normalize_business_id(to_number)
+            if normalized_business_id:
+                consumer_metadata_tokens.append(
+                    f"[business_id={normalized_business_id}]"
+                )
+
+        consumer_metadata_line = " ".join(consumer_metadata_tokens)
+        consumer_input_text = (
+            f"{consumer_metadata_line} {self.text}"
+            if consumer_metadata_line
+            else str(self.text)
+        )
 
         session_identifier = _build_session_id(
             from_number=from_number,
@@ -1016,30 +1089,61 @@ class ProcessText(BaseStepFunction):
 
         assess_user_type = None
         # assess_changes emits the canonical UserType field; the legacy "Type"
-        # value is deprecated and not used for routing decisions.
+        # value is deprecated but read for backwards compatibility.
         assess_user_type_raw = assess_user_data.get("UserType")
         if assess_user_type_raw is None:
             assess_user_type_raw = assess_user_data.get("Type")
         if assess_user_type_raw:
             assess_user_type = str(assess_user_type_raw).strip().upper()
 
+        # Normalized numbers used for inference safeguards (e.g., business owner
+        # messaging from the business number itself).
+        normalized_from_number = _normalize_business_id(from_number)
+
+        # Business users set by the Business Agent are expected to carry a
+        # BusinessId. We keep it for potential inference but only if no explicit
+        # user type is provided.
+        assess_business_id: Optional[str] = None
+        try:
+            assess_business_id = _normalize_business_id(
+                assess_user_data.get("BusinessId")
+            )
+        except Exception:
+            assess_business_id = None
+
+        # Some callers (e.g., direct Lambda invocations) may provide an
+        # explicit user type on the event.
+        event_user_type_raw = self.event.get("user_type") or self.event.get("UserType")
+        event_user_type = (
+            str(event_user_type_raw).strip().upper() if event_user_type_raw else None
+        )
+
         # 3) Final decision:
-        #    - If assess_changes marks this as B (Type == "B"), TREAT AS BUSINESS.
-        #    - Otherwise, if metadata explicitly says C, treat as Consumer.
-        #    - Otherwise, if metadata says B, treat as Business.
+        #    - Honor explicit B/C markers from event, assess_changes, or metadata.
+        #    - If still unknown and the sender is the business number itself,
+        #      infer Business (owner) from the BusinessId match.
         #    - Default: Consumer.
-        user_type = "C"
+        user_type = USER_TYPE_CONSUMER
         user_type_source = "default"
 
-        if assess_user_type == "B":
-            user_type = "B"
+        explicit_user_type: Optional[str] = None
+        valid_user_types = {USER_TYPE_BUSINESS, USER_TYPE_CONSUMER}
+        if event_user_type in valid_user_types:
+            explicit_user_type = event_user_type
+            user_type_source = "event.user_type"
+        elif assess_user_type in valid_user_types:
+            explicit_user_type = assess_user_type
             user_type_source = "assess_changes.Type"
-        elif metadata_user_type in ("C",):
-            user_type = "C"
+        elif metadata_user_type in valid_user_types:
+            explicit_user_type = metadata_user_type
             user_type_source = "metadata"
-        elif metadata_user_type in ("B",):
-            user_type = "B"
-            user_type_source = "metadata"
+
+        if explicit_user_type:
+            user_type = explicit_user_type
+        elif assess_business_id and assess_business_id == normalized_from_number:
+            # Business owner messaging from their own business number.
+            user_type = USER_TYPE_BUSINESS
+            user_type_source = "assess_changes.BusinessId:from_number_match"
 
         self.logger.info(
             "Determined user type for routing",
@@ -1048,13 +1152,15 @@ class ProcessText(BaseStepFunction):
                 "user_type_source": user_type_source,
                 "metadata_user_type": metadata_user_type,
                 "assess_user_type": assess_user_type,
+                "event_user_type": event_user_type,
+                "assess_business_id": assess_business_id,
             },
         )
 
         # ------------------------------------------------------------------
         # Route to the correct agent
         # ------------------------------------------------------------------
-        if user_type == "B":
+        if user_type == USER_TYPE_BUSINESS:
             # --------------------------------------------------------------
             # Business owner path → Business-Owner-Agent
             # Resolve business_id for this business user if possible.
@@ -1062,19 +1168,19 @@ class ProcessText(BaseStepFunction):
             business_id: Optional[str] = None
 
             # 1) Prefer BusinessId stored on user_data (once Agent sets it)
-            candidate = assess_user_data.get("BusinessId")
+            candidate = assess_business_id or assess_user_data.get("BusinessId")
             if candidate:
-                business_id = str(candidate).strip()
+                business_id = _normalize_business_id(candidate)
 
             # 2) If not present, try deriving from the current text (e.g. "972502649476")
             if not business_id:
                 text_candidate = _extract_business_id_candidate_from_text(self.text)
                 if text_candidate:
-                    business_id = text_candidate
+                    business_id = _normalize_business_id(text_candidate)
 
             # 3) If still missing, fall back to the WhatsApp "to" number
             if not business_id and to_number:
-                business_id = str(to_number).strip()
+                business_id = _normalize_business_id(to_number)
 
             if business_id:
                 # Build compact metadata line to help the Business Agent tools.
@@ -1141,10 +1247,24 @@ class ProcessText(BaseStepFunction):
                     "from_number": from_number,
                 },
             )
+
+            consumer_agent_id = (
+                os.environ.get("CONSUMER_AGENT_ID")
+                or os.environ.get("BEDROCK_AGENT_ID")
+                or os.environ.get("AGENT_ID")
+            )
+            consumer_agent_alias_id = (
+                os.environ.get("CONSUMER_AGENT_ALIAS_ID")
+                or os.environ.get("BEDROCK_AGENT_ALIAS_ID")
+                or os.environ.get("AGENT_ALIAS_ID")
+            )
+
             try:
                 raw_response = call_bedrock_agent(
                     session_id=session_identifier,
                     input_text=consumer_input_text,
+                    agent_id=consumer_agent_id,
+                    agent_alias_id=consumer_agent_alias_id,
                 )
             except Exception as exc:
                 # IMPORTANT:
@@ -1183,6 +1303,9 @@ class ProcessText(BaseStepFunction):
                     "Bedrock/Agent response was not valid JSON after parsing",
                     extra={"session_id": session_identifier},
                 )
+                answer_only = _extract_answer_text(raw_response)
+                if answer_only:
+                    reply_text = answer_only
                 bedrock_response_json = {"raw_response": raw_response}
             else:
                 bedrock_response_json = parsed
