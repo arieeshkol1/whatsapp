@@ -153,8 +153,6 @@ def format_order_progress_summary(state: Optional[Dict[str, Any]]) -> Optional[s
 
     if state.get("age_verified") is True:
         lines.append("• כל המשתתפים באירוע מעל גיל 18")
-    elif state.get("age_verified") is False:
-        lines.append("• טרם התקבלה הצהרה שכל המשתתפים מעל גיל 18")
 
     if state.get("customer_name"):
         lines.append(f"• שם הלקוח: {state['customer_name']}")
