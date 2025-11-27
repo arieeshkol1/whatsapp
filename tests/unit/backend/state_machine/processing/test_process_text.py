@@ -95,6 +95,18 @@ def test_process_text_persists_user_updates(monkeypatch):
     _stub_routing_dependencies(monkeypatch)
     monkeypatch.setattr(
         process_text_module,
+        "_save_interaction_to_history",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        process_text_module, "_touch_user_info_record", lambda *args, **kwargs: None
+    )
+
+
+def test_process_text_persists_user_updates(monkeypatch):
+    _stub_routing_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        process_text_module,
         "call_bedrock_agent",
         lambda **_: json.dumps(
             {
