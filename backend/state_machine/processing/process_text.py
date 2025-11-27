@@ -1093,9 +1093,13 @@ class ProcessText(BaseStepFunction):
         if assess_user_type_raw:
             assess_user_type = str(assess_user_type_raw).strip().upper()
 
+        # Normalized numbers used for inference safeguards (e.g., business owner
+        # messaging from the business number itself).
+        normalized_from_number = _normalize_business_id(from_number)
+
         # Business users set by the Business Agent are expected to carry a
-        # BusinessId; when present we should prioritize routing to the business
-        # agent even if UserType was not explicitly set to "B".
+        # BusinessId. We keep it for potential inference but only if no explicit
+        # user type is provided.
         assess_business_id: Optional[str] = None
         try:
             assess_business_id = _normalize_business_id(
@@ -1112,30 +1116,30 @@ class ProcessText(BaseStepFunction):
         )
 
         # 3) Final decision:
-        #    - If event metadata marks this as B, treat as Business.
-        #    - If assess_changes marks this as B (Type == "B"), treat as Business.
-        #    - If metadata explicitly says B, treat as Business.
-        #    - If assess_changes includes a BusinessId, treat as Business.
-        #    - If metadata explicitly says C, treat as Consumer.
+        #    - Honor explicit B/C markers from event, assess_changes, or metadata.
+        #    - If still unknown and the sender is the business number itself,
+        #      infer Business (owner) from the BusinessId match.
         #    - Default: Consumer.
         user_type = "C"
         user_type_source = "default"
 
-        if event_user_type == "B":
-            user_type = "B"
+        explicit_user_type: Optional[str] = None
+        if event_user_type in {"B", "C"}:
+            explicit_user_type = event_user_type
             user_type_source = "event.user_type"
-        elif assess_user_type == "B":
-            user_type = "B"
+        elif assess_user_type in {"B", "C"}:
+            explicit_user_type = assess_user_type
             user_type_source = "assess_changes.Type"
-        elif metadata_user_type in ("B",):
-            user_type = "B"
+        elif metadata_user_type in {"B", "C"}:
+            explicit_user_type = metadata_user_type
             user_type_source = "metadata"
-        elif assess_business_id:
+
+        if explicit_user_type:
+            user_type = explicit_user_type
+        elif assess_business_id and assess_business_id == normalized_from_number:
+            # Business owner messaging from their own business number.
             user_type = "B"
-            user_type_source = "assess_changes.BusinessId"
-        elif metadata_user_type in ("C",):
-            user_type = "C"
-            user_type_source = "metadata"
+            user_type_source = "assess_changes.BusinessId:from_number_match"
 
         self.logger.info(
             "Determined user type for routing",
