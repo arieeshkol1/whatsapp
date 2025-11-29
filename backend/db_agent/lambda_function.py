@@ -144,6 +144,38 @@ def upsert_business_rules(business_id: str, version: str, rules: dict) -> dict:
 # -------------------- USER DATA -------------------- #
 
 
+def get_user_data(phone_number: str) -> dict:
+    """
+    Fetch a user profile from the UserData table by phone number.
+
+    Primary key:
+      PhoneNumber (string, without leading '+').
+    """
+    try:
+        resp = USERDATA_TABLE.get_item(Key={"PhoneNumber": phone_number})
+    except ClientError as e:
+        logger.exception("DynamoDB get_item failed for phone_number=%s", phone_number)
+        return {
+            "status": "error",
+            "error_code": "DDB_GET_ERROR",
+            "message": str(e),
+            "phone_number": phone_number,
+        }
+
+    item = resp.get("Item")
+    if not item:
+        return {
+            "status": "not_found",
+            "phone_number": phone_number,
+        }
+
+    return {
+        "status": "ok",
+        "phone_number": phone_number,
+        "user_data": _normalize_ddb_types(item),
+    }
+
+
 def update_user_business_id(phone_number: str, business_id: str) -> dict:
     """
     Adds or updates the BusinessId field for the user in UserData table.
@@ -160,6 +192,90 @@ def update_user_business_id(phone_number: str, business_id: str) -> dict:
     return {
         "phone_number": phone_number,
         "business_id": business_id,
+        "updated_at": now,
+    }
+
+
+def update_user_name_profile(phone_number: str, name_value):
+    """
+    Update the Name field for a user in the UserData table.
+
+    - Name is a FLEXIBLE JSON PROFILE blob stored as a string in DynamoDB.
+      It may contain:
+        - Name-related fields (FullName, FirstName, LastName, etc.)
+        - Other attributes (Email, City, Address, etc.)
+
+    - The Agent passes `name_value` as either:
+        * A JSON string (preferred) representing a dict of attributes, OR
+        * A plain string (fallback), treated as {"FullName": "<string>"}.
+
+    - This function:
+        1. Loads the existing Name JSON (if present and valid) into a dict.
+        2. Parses the new `name_value` into a dict of attributes.
+        3. Merges them: existing_profile.update(new_fields)
+           (new values override old ones for the same keys).
+        4. Stores the merged dict, JSON-encoded, back into Name.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    # 1. Load existing Name profile (if any)
+    existing_profile = {}
+    try:
+        resp = USERDATA_TABLE.get_item(Key={"PhoneNumber": phone_number})
+        item = resp.get("Item")
+        if item and "Name" in item:
+            existing_name = item.get("Name")
+            if isinstance(existing_name, str):
+                try:
+                    existing_profile = json.loads(existing_name)
+                    if not isinstance(existing_profile, dict):
+                        existing_profile = {}
+                except json.JSONDecodeError:
+                    existing_profile = {}
+    except ClientError:
+        # If read fails, we still proceed with an empty base profile.
+        logger.exception(
+            "Failed to read existing Name profile for phone_number=%s", phone_number
+        )
+
+    # 2. Parse new name_value
+    new_fields = {}
+    if isinstance(name_value, str):
+        # Try to parse as JSON first
+        try:
+            parsed = json.loads(name_value)
+            if isinstance(parsed, dict):
+                new_fields = parsed
+            else:
+                # If it's valid JSON but not a dict, treat as FullName
+                new_fields = {"FullName": name_value}
+        except json.JSONDecodeError:
+            # Plain string: treat as FullName
+            new_fields = {"FullName": name_value}
+    elif isinstance(name_value, dict):
+        new_fields = name_value
+    else:
+        # Fallback: convert to string
+        new_fields = {"FullName": str(name_value)}
+
+    # 3. Merge existing and new attributes
+    merged_profile = {**existing_profile, **new_fields}
+
+    # 4. Write back to DynamoDB as JSON string
+    merged_str = json.dumps(merged_profile, ensure_ascii=False)
+
+    USERDATA_TABLE.update_item(
+        Key={"PhoneNumber": phone_number},
+        UpdateExpression="SET #n = :name, updated_at = :u",
+        ExpressionAttributeNames={"#n": "Name"},
+        ExpressionAttributeValues={":name": merged_str, ":u": now},
+    )
+
+    return {
+        "status": "ok",
+        "phone_number": phone_number,
+        "profile": merged_profile,
+        "stored_value": merged_str,
         "updated_at": now,
     }
 
@@ -354,6 +470,52 @@ def lambda_handler(event, context):
                 )
 
             result = update_user_business_id(phone, business_id)
+            return build_success_response(
+                action_group, function, message_version, result
+            )
+
+        # ---------------- USER DATA FUNCTIONS ---------------- #
+
+        elif function == "QueryUserData":
+            phone = params.get("phone_number")
+
+            if not phone:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'phone_number' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            result = get_user_data(phone)
+            return build_success_response(
+                action_group, function, message_version, result
+            )
+
+        elif function == "UpdateUserName":
+            phone = params.get("phone_number")
+            name_value = params.get("name")
+
+            if not phone:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'phone_number' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            if name_value is None:
+                return build_error_response(
+                    action_group,
+                    function,
+                    message_version,
+                    "Missing 'name' parameter",
+                    code="MISSING_PARAMETER",
+                )
+
+            result = update_user_name_profile(phone, name_value)
             return build_success_response(
                 action_group, function, message_version, result
             )
