@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from datetime import datetime
 from decimal import Decimal
@@ -663,6 +664,54 @@ def _extract_business_id_candidate_from_text(text: Optional[str]) -> Optional[st
     return None
 
 
+def _compute_sentiment_score(
+    text: Optional[str], session_id: Optional[str] = None
+) -> Optional[int]:
+    """Return a 1–10 sentiment score using Bedrock only.
+
+    Delegates sentiment classification to the Bedrock agent instead of
+    heuristics. Returns None if Bedrock is unavailable or returns an
+    un-parseable response.
+    """
+
+    if not text:
+        return None
+
+    prompt = (
+        "You are a sentiment grader. Rate the user's message on a scale from 1 "
+        "(very angry) to 10 (very happy). Respond with ONLY the integer. "
+        "Message: "
+        f"\n{text}"
+    )
+
+    try:
+        response = call_bedrock_agent(
+            session_id=session_id or "sentiment-grader", input_text=prompt
+        )
+    except Exception:
+        logger.exception("Failed to compute sentiment via Bedrock")
+        return None
+
+    if not response:
+        return None
+
+    match = re.search(r"\b(\d{1,2})\b", str(response))
+    if not match:
+        logger.warning(
+            "Bedrock sentiment response missing numeric score", extra={"response": response}
+        )
+        return None
+
+    value = int(match.group(1))
+    if 1 <= value <= 10:
+        return value
+
+    logger.warning(
+        "Bedrock sentiment score out of expected range", extra={"score": value}
+    )
+    return None
+
+
 # ----------------------------------------------------------------------
 # NEW: Interaction-history helpers (PK = business_number, no to_number attr)
 # ----------------------------------------------------------------------
@@ -674,6 +723,7 @@ def _save_interaction_to_history(
     correlation_id: Optional[str],
     conversation_id: Optional[int],
     whatsapp_id: Optional[str],
+    sentiment_score: Optional[int],
 ) -> Optional[str]:
     """
     Save a single interaction into the Interaction-history table.
@@ -701,6 +751,7 @@ def _save_interaction_to_history(
         "correlation_id": correlation_id,
         "conversation_id": int(conversation_id) if conversation_id else None,
         "whatsapp_id": whatsapp_id,
+        "sentiment_score": sentiment_score,
     }
 
     # Strip None values to keep items clean
@@ -902,6 +953,10 @@ class ProcessText(BaseStepFunction):
         # Keep UsersInfo in sync
         _touch_user_info_record(from_number, last_seen_at or datetime.utcnow())
 
+        sentiment_score = _compute_sentiment_score(
+            self.text, session_id=self.correlation_id or "sentiment"
+        )
+
         # ------------------------------------------------------------------
         # NEW: Persist into Interaction-history with PK = business_number
         # ------------------------------------------------------------------
@@ -914,6 +969,7 @@ class ProcessText(BaseStepFunction):
             correlation_id=self.correlation_id,
             conversation_id=conversation_id,
             whatsapp_id=current_whatsapp_id,
+            sentiment_score=sentiment_score,
         )
 
         # ------------------------------------------------------------------
